@@ -27,6 +27,12 @@ def generate_launch_description():
         parameters=[config_path]
     )
 
+    joy_node = Node(
+        package = 'joy',
+        executable = 'joy_node',
+        output='screen'
+    )
+
     image_view = Node(
         package='rqt_image_view',
         executable='rqt_image_view',
@@ -44,6 +50,8 @@ def generate_launch_description():
 
     launch_discrption = LaunchDescription()
 
+    if(launch_params['joy'] is True):
+        launch_discrption.add_entity(joy_node)
     if(launch_params['image_view'] is True):
         launch_discrption.add_entity(image_view)
     if(launch_params['rviz'] is True):
