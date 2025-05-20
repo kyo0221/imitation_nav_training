@@ -1,12 +1,14 @@
 launch:
   ros__parameters:
-    use_rviz: true
+    joy: true
+    image_view: false
+    rviz: false
      
 data_collector:
   ros__parameters:
     image_topic: "/image_raw"
     cmd_vel_topic: "/cmd_vel"
-    image_width: 224
-    image_height: 224
+    image_width: 480
+    image_height: 300
     output_path: "dataset.pt"
     max_data_count: 10000
