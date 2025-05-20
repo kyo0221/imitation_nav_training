@@ -3,6 +3,11 @@ launch:
     joy: true
     image_view: false
     rviz: false
+
+controller:
+  ros__parameters:
+    linear_max_vel: 5.0
+    angular_max_vel: 1.57
      
 data_collector:
   ros__parameters:

@@ -27,6 +27,14 @@ def generate_launch_description():
         parameters=[config_path]
     )
 
+    controller_node = Node(
+        package=pkg_name,
+        executable='controller_node',
+        name='controller',
+        output='screen',
+        parameters=[config_path]
+    )
+
     joy_node = Node(
         package = 'joy',
         executable = 'joy_node',
@@ -52,6 +60,7 @@ def generate_launch_description():
 
     if(launch_params['joy'] is True):
         launch_discrption.add_entity(joy_node)
+        launch_discrption.add_entity(controller_node)
     if(launch_params['image_view'] is True):
         launch_discrption.add_entity(image_view)
     if(launch_params['rviz'] is True):

@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
         'data_collector_node = imitation_nav_training.data_collector_node:main',
+        'controller_node = imitation_nav_training.controller_node:main',
         ],
     },
 )
