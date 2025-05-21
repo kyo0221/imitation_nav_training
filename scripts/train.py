@@ -16,8 +16,8 @@ class Config:
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)['train']
 
-        self.package_dir = package_dir
-        self.result_dir = os.path.join(package_dir, 'logs', 'result')
+        self.package_dir = os.path.dirname(os.path.realpath(__file__))
+        self.result_dir = os.path.join(self.package_dir, '..', 'logs', 'result')
         os.makedirs(self.result_dir, exist_ok=True)
 
         self.batch_size = config['batch_size']
