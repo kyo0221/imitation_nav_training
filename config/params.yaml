@@ -1,7 +1,7 @@
 launch:
   ros__parameters:
     joy: true
-    image_view: false
+    image_view: true
     rviz: false
 
 controller:
@@ -13,7 +13,7 @@ data_collector:
   ros__parameters:
     image_topic: "/image_raw"
     cmd_vel_topic: "/cmd_vel"
-    image_width: 480
-    image_height: 300
+    image_height: 48
+    image_width: 64
     log_name: "dataset.pt"
     max_data_count: 10000
