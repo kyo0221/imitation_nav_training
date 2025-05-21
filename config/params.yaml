@@ -6,7 +6,7 @@ launch:
 
 controller:
   ros__parameters:
-    linear_max_vel: 5.0
+    linear_max_vel: 3.0
     angular_max_vel: 1.57
      
 data_collector:
@@ -15,5 +15,5 @@ data_collector:
     cmd_vel_topic: "/cmd_vel"
     image_width: 480
     image_height: 300
-    output_path: "dataset.pt"
+    log_name: "dataset.pt"
     max_data_count: 10000

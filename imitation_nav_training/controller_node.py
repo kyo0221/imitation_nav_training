@@ -25,7 +25,7 @@ class ControllerNode(Node):
         self.linear_max_vel = self.get_parameter('linear_max_vel').value
         self.angular_max_vel = self.get_parameter('angular_max_vel').value
         self.is_autonomous = self.get_parameter('autonomous_flag').value
-        self.is_emergency = False
+        self.is_save = False
 
         self.prev_buttons = [0] * 12  # ボタン数を仮定して初期化
 
@@ -33,7 +33,7 @@ class ControllerNode(Node):
         self.publisher_vel = self.create_publisher(Twist, 'cmd_vel', qos)
         self.publisher_stop = self.create_publisher(Empty, 'stop', qos)
         self.publisher_restart = self.create_publisher(Empty, 'restart', qos)
-        self.publisher_emergency = self.create_publisher(Bool, 'emergency', qos)
+        self.publisher_save = self.create_publisher(Bool, 'save', qos)
         self.publisher_autonomous = self.create_publisher(Bool, 'autonomous', qos)
         self.publisher_nav_start = self.create_publisher(Empty, 'nav_start', qos)
 
@@ -53,6 +53,13 @@ class ControllerNode(Node):
         def is_pressed(idx):
             return buttons[idx] == 1 and self.prev_buttons[idx] == 0
 
+        if is_pressed(Buttons.Options):
+            self.is_save = not self.is_save
+            msg_save = Bool()
+            msg_save.data = self.is_save
+            self.publisher_save.publish(msg_save)
+            self.get_logger().info(f'データ収集フラグ: {self.is_save}')
+
         # Shareボタン → 自律 / 手動 切り替え
         if is_pressed(Buttons.Share):
             self.is_autonomous = not self.is_autonomous
@@ -64,10 +71,6 @@ class ControllerNode(Node):
         if is_pressed(Buttons.Circle):
             self.publisher_nav_start.publish(Empty())
             self.get_logger().info('自律走行開始')
-
-        if is_pressed(Buttons.Options):
-            self.publisher_restart.publish(Empty())
-            self.get_logger().info('再稼働')
 
         if not self.is_autonomous:
             twist = Twist()
