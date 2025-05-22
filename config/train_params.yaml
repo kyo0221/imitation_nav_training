@@ -1,8 +1,9 @@
 train:
   batch_size: 32          # バッチサイズ（1ステップあたりのサンプル数）
-  epochs: 10              # エポック数（全データを何周するか）
+  epochs: 100              # エポック数（全データを何周するか）
   learning_rate: 0.0001   # 学習率（Adam最適化器に渡す）
   shuffle: true           # データローダのシャッフル設定（true 推奨）
   image_height: 48
   image_width: 64
   model_filename: model.pt # 出力する学習済みモデルの名前
+  interval_ms: 500
