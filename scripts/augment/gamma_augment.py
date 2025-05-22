@@ -9,17 +9,20 @@ from ament_index_python.packages import get_package_share_directory
 
 
 class GammaAugmentor:
-    def __init__(self, config_path='config/augment_params.yaml'):
+    def __init__(self, config_path='config/augment_params.yaml', input_dataset_path=None):
         self.package_dir = os.path.dirname(os.path.realpath(__file__))
-        self.logs_dir = os.path.abspath(os.path.join(self.package_dir, '..', 'logs'))
-        self.config_path = os.path.abspath(os.path.join(self.package_dir, '..', config_path))
+        self.logs_dir = os.path.abspath(os.path.join(self.package_dir, '..', '..', 'logs'))
+        self.config_path = os.path.abspath(os.path.join(self.package_dir, '..', '..', config_path))
 
         self._load_config()
+
+        if input_dataset_path is not None:
+            self.input_dataset = input_dataset_path
 
     def _load_config(self):
         with open(self.config_path, 'r') as f:
             params = yaml.safe_load(f)['argment']
-        
+
         self.input_dataset = os.path.join(self.logs_dir, params['input_dataset'])
         self.output_dataset = os.path.join(self.logs_dir, params['output_dataset'])
         self.gamma_range = params['gamma_range']

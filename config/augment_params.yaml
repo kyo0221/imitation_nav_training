@@ -1,5 +1,5 @@
 argment:
-  input_dataset: dataset.pt                # 拡張対象の元データ名
+  input_dataset: hoge.pt                # 拡張対象の元データ名(augment単体実行で使用)
   output_dataset: dataset_gamma.pt         # 拡張後のデータ名
   gamma_range: [0.5, 1.5]                  # ランダムガンマ補正の範囲（暗〜明）
   num_augmented_samples: 2                 # 1枚の画像から生成する補正画像の数

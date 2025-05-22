@@ -30,7 +30,7 @@ setup(
         'console_scripts': [
             'data_collector_node = imitation_nav_training.data_collector_node:main',
             'controller_node = imitation_nav_training.controller_node:main',
-            'augment_node = imitation_nav_training.augment_gamma:main',
+            'augment_node = imitation_nav_training.augment.gamma_augment:main',
             'train.py = imitation_nav_training.train_model:main',
         ],
     },
