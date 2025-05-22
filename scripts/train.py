@@ -7,6 +7,7 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 from torch.utils.data import TensorDataset, DataLoader
 from ament_index_python.packages import get_package_share_directory
+from augment.gamma_augment import GammaAugmentor
 
 
 class Config:
@@ -79,13 +80,11 @@ class Training:
         self.dataset_path = dataset_path
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # Load dataset
         data = torch.load(self.dataset_path)
         images, angles = data['images'], data['angles']
         dataset = TensorDataset(images, angles)
         self.loader = DataLoader(dataset, batch_size=config.batch_size, shuffle=config.shuffle)
 
-        # Setup model
         self.model = AnglePredictor(3, 1, config.image_height, config.image_width).to(self.device)
         self.criterion = nn.MSELoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=config.learning_rate)
@@ -113,14 +112,12 @@ class Training:
         self.save_results()
 
     def save_results(self):
-        # Save TorchScript model only (for LibTorch use)
         example_input = torch.randn(1, 3, self.config.image_height, self.config.image_width).to(self.device)
         scripted_model = torch.jit.trace(self.model, example_input)
         scripted_path = os.path.join(self.config.result_dir, self.config.model_filename)
         scripted_model.save(scripted_path)
         print(f"🧠 学習済みモデルを保存しました: {scripted_path}")
 
-        # Plot loss curve
         plt.figure()
         plt.plot(self.loss_log)
         plt.title("Training Loss")
@@ -128,7 +125,7 @@ class Training:
         plt.ylabel("Loss")
         loss_plot_path = os.path.join(self.config.result_dir, 'loss_curve.png')
         plt.savefig(loss_plot_path)
-        print(f"📈 損失推移グラフを保存しました: {loss_plot_path}")
+        print(f"📈 损失推移グラフを保存しました: {loss_plot_path}")
 
 
 if __name__ == '__main__':
@@ -136,6 +133,10 @@ if __name__ == '__main__':
     parser.add_argument('dataset', type=str, help='Path to dataset .pt file')
     args = parser.parse_args()
 
+    augmentor = GammaAugmentor(input_dataset_path=args.dataset)
+    augmentor.augment()
+    dataset_path = augmentor.output_dataset
+
     config = Config()
-    trainer = Training(config, args.dataset)
+    trainer = Training(config, augmentor.output_dataset)
     trainer.train()
