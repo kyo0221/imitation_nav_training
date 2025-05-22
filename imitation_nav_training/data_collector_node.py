@@ -104,14 +104,12 @@ class DataCollector(Node):
         for img_tensor, ang_vel in zip(original_images, original_vels):
             img = (img_tensor.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
 
-            for sign in [-1, 1]:
-                # 5度傾ける（±）
+            for sign in [-1, -0.5, 0.5, 1]:
                 rot_mat = cv2.getRotationMatrix2D((img.shape[1] // 2, img.shape[0] // 2), sign * angle_offset_deg, 1.0)
                 rotated_img = cv2.warpAffine(img, rot_mat, (img.shape[1], img.shape[0]), borderMode=cv2.BORDER_REFLECT)
 
                 rotated_tensor = torch.tensor(rotated_img, dtype=torch.float32).permute(2, 0, 1) / 255.0
 
-                # 対応する角速度の補正（±0.2を加算）
                 corrected_vel = ang_vel + torch.tensor([-sign * vel_offset], dtype=torch.float32)
 
                 self.images.append(rotated_tensor)
