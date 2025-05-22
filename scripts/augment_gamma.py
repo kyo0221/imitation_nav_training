@@ -5,17 +5,19 @@ import random
 import numpy as np
 import cv2
 from tqdm import tqdm
+from ament_index_python.packages import get_package_share_directory
+
 
 class GammaAugmentor:
     def __init__(self, config_path='config/augment_params.yaml'):
-        self.base_dir = os.path.dirname(os.path.abspath(__file__))
-        self.logs_dir = os.path.join(self.base_dir, 'logs')
+        self.package_dir = os.path.dirname(os.path.realpath(__file__))
+        self.logs_dir = os.path.abspath(os.path.join(self.package_dir, '..', 'logs'))
+        self.config_path = os.path.abspath(os.path.join(self.package_dir, '..', config_path))
 
-        self._load_config(config_path)
+        self._load_config()
 
-    def _load_config(self, config_path):
-        full_path = os.path.join(self.base_dir, config_path)
-        with open(full_path, 'r') as f:
+    def _load_config(self):
+        with open(self.config_path, 'r') as f:
             params = yaml.safe_load(f)['argment']
         
         self.input_dataset = os.path.join(self.logs_dir, params['input_dataset'])
