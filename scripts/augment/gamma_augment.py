@@ -7,7 +7,6 @@ import cv2
 from tqdm import tqdm
 from ament_index_python.packages import get_package_share_directory
 
-
 class GammaAugmentor:
     def __init__(self, config_path='config/augment_params.yaml', input_dataset_path=None):
         self.package_dir = os.path.dirname(os.path.realpath(__file__))
@@ -31,7 +30,7 @@ class GammaAugmentor:
         self.output_dataset = os.path.join(self.logs_dir, params['output_dataset'])
         self.gamma_range = params['gamma_range']
         self.num_augmented_samples = params['num_augmented_samples']
-        self.visualize_flag = params['visualize_image']
+        self.visualize_flag = params.get('visualize_image', False)
 
     def _apply_gamma_correction(self, image: np.ndarray, gamma: float) -> np.ndarray:
         inv_gamma = 1.0 / gamma
@@ -46,13 +45,16 @@ class GammaAugmentor:
         data = torch.load(self.input_dataset)
         images = data['images']
         angles = data['angles']
+        actions = data['actions']
 
         new_images = []
         new_angles = []
+        new_actions = []
 
-        for idx, (img_tensor, angle) in enumerate(tqdm(zip(images, angles), total=len(images), desc="Augmenting")):
+        for idx, (img_tensor, angle, action) in enumerate(tqdm(zip(images, angles, actions), total=len(images), desc="Augmenting")):
             new_images.append(img_tensor)
             new_angles.append(angle)
+            new_actions.append(action)
 
             img_np = (img_tensor.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
 
@@ -63,15 +65,19 @@ class GammaAugmentor:
 
                 new_images.append(gamma_tensor)
                 new_angles.append(angle.clone())
+                new_actions.append(action.clone())
 
                 if self.visualize_flag:
                     save_path = os.path.join(self.visualize_dir, f"{idx:05d}_aug{i}_gamma{gamma:.2f}.png")
                     cv2.imwrite(save_path, gamma_img)
 
         print(f"💾 Saving augmented dataset to {self.output_dataset}")
-        torch.save({'images': torch.stack(new_images), 'angles': torch.stack(new_angles)}, self.output_dataset)
+        torch.save({
+            'images': torch.stack(new_images),
+            'angles': torch.stack(new_angles),
+            'actions': torch.stack(new_actions)
+        }, self.output_dataset)
         print(f"✅ Augmentation complete: {len(images)} → {len(new_images)} samples")
-
 
 if __name__ == '__main__':
     augmentor = GammaAugmentor()

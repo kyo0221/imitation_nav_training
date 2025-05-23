@@ -2,7 +2,7 @@ import os
 import sys
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import Twist
 
@@ -10,9 +10,8 @@ from cv_bridge import CvBridge
 import cv2
 import torch
 import numpy as np
-from collections import deque
-
 from ament_index_python.packages import get_package_share_directory
+
 
 class DataCollector(Node):
     def __init__(self):
@@ -41,6 +40,14 @@ class DataCollector(Node):
         self.bridge = CvBridge()
         self.images = []
         self.ang_vels = []
+        self.actions = []
+
+        self.action_to_index = {
+            "straight": 0,
+            "left": 1,
+            "right": 2
+        }
+        self.command_mode = "straight"
         self.last_ang_vel = 0.0
 
         self.save_flag = False
@@ -48,14 +55,14 @@ class DataCollector(Node):
         self.latest_image_msg = None
 
         self.save_flag_sub = self.create_subscription(Bool, '/save', self.save_callback, 10)
+        self.cmd_mode_sub = self.create_subscription(String, "/cmd_route", self.command_mode_callback, 10)
         self.image_sub = self.create_subscription(Image, self.image_topic, self.image_callback, 10)
         self.cmd_sub = self.create_subscription(Twist, self.cmd_vel_topic, self.cmd_callback, 10)
 
-        self.get_logger().info(f"Subscribed to {self.image_topic} and {self.cmd_vel_topic}")
+        self.get_logger().info(f"Subscribed to {self.image_topic}, {self.cmd_vel_topic}, and /cmd_route")
         self.get_logger().info(f"Saving to {self.save_log_path} with max count {self.max_data_count}")
 
         self.timer = self.create_timer(self.interval_ms / 1000.0, self.periodic_collect)
-
 
     def cmd_callback(self, msg):
         self.last_ang_vel = msg.angular.z
@@ -63,15 +70,21 @@ class DataCollector(Node):
     def save_callback(self, msg):
         if msg.data and not self.data_saved:
             self.get_logger().info("💾 Save flag received, saving data...")
-        
+
         if len(self.images) and not msg.data:
             self.data_argmentation()
             self.save_data()
             self.data_saved = True
 
+    def command_mode_callback(self, msg):
+        if msg.data in self.action_to_index:
+            self.command_mode = msg.data
+        else:
+            self.get_logger().warn(f"Unknown command_mode received: {msg.data}, defaulting to 'straight'")
+            self.command_mode = "straight"
+
     def image_callback(self, msg):
         self.latest_image_msg = msg
-
 
     def periodic_collect(self):
         if self.save_flag or self.latest_image_msg is None:
@@ -84,6 +97,7 @@ class DataCollector(Node):
 
             self.images.append(tensor_image)
             self.ang_vels.append(torch.tensor([self.last_ang_vel], dtype=torch.float32))
+            self.actions.append(torch.tensor([self.action_to_index[self.command_mode]], dtype=torch.long))
 
             if len(self.images) >= self.max_data_count:
                 self.get_logger().info("Max data count reached.")
@@ -92,7 +106,6 @@ class DataCollector(Node):
         except Exception as e:
             self.get_logger().error(f"[collect] Image processing failed: {e}")
 
-
     def data_argmentation(self):
         num_augmented = 0
         angle_offset_deg = 5
@@ -100,8 +113,9 @@ class DataCollector(Node):
 
         original_images = self.images.copy()
         original_vels = self.ang_vels.copy()
+        original_actions = self.actions.copy()
 
-        for img_tensor, ang_vel in zip(original_images, original_vels):
+        for img_tensor, ang_vel, action in zip(original_images, original_vels, original_actions):
             img = (img_tensor.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
 
             for sign in [-1, -0.5, 0.5, 1]:
@@ -109,14 +123,14 @@ class DataCollector(Node):
                 rotated_img = cv2.warpAffine(img, rot_mat, (img.shape[1], img.shape[0]), borderMode=cv2.BORDER_REFLECT)
 
                 rotated_tensor = torch.tensor(rotated_img, dtype=torch.float32).permute(2, 0, 1) / 255.0
-
                 corrected_vel = ang_vel + torch.tensor([-sign * vel_offset], dtype=torch.float32)
 
                 self.images.append(rotated_tensor)
                 self.ang_vels.append(corrected_vel)
+                self.actions.append(action.clone())
                 num_augmented += 1
 
-        self.get_logger().info(f"📈 Data augmentation complete. {num_augmented} samples added.")        
+        self.get_logger().info(f"📈 Data augmentation complete. {num_augmented} samples added.")
 
     def save_data(self):
         if len(self.images) == 0:
@@ -125,7 +139,14 @@ class DataCollector(Node):
 
         images_tensor = torch.stack(self.images)
         ang_vels_tensor = torch.stack(self.ang_vels)
-        torch.save({'images': images_tensor, 'angles': ang_vels_tensor}, self.save_path)
+        actions_tensor = torch.stack(self.actions)
+
+        torch.save({
+            'images': images_tensor,
+            'angles': ang_vels_tensor,
+            'actions': actions_tensor,
+            'action_classes': list(self.action_to_index.keys())
+        }, self.save_path)
 
         if rclpy.ok():
             self.get_logger().info(f"✨ Saved {len(self.images)} samples to {self.save_path}")

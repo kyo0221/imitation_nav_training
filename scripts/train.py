@@ -30,8 +30,8 @@ class Config:
         self.model_filename = config['model_filename']
 
 
-class AnglePredictor(nn.Module):
-    def __init__(self, n_channel, n_out, input_height, input_width):
+class ConditionalAnglePredictor(nn.Module):
+    def __init__(self, n_channel, n_out, input_height, input_width, n_action_classes):
         super().__init__()
         self.conv1 = nn.Conv2d(n_channel, 32, kernel_size=8, stride=4)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2)
@@ -50,13 +50,8 @@ class AnglePredictor(nn.Module):
             x = self.flatten(x)
             flattened_size = x.shape[1]
 
-        self.fc4 = nn.Linear(flattened_size, 512)
+        self.fc4 = nn.Linear(flattened_size + n_action_classes, 512)
         self.fc5 = nn.Linear(512, n_out)
-
-        torch.nn.init.kaiming_normal_(self.conv1.weight)
-        torch.nn.init.kaiming_normal_(self.conv2.weight)
-        torch.nn.init.kaiming_normal_(self.conv3.weight)
-        torch.nn.init.kaiming_normal_(self.fc4.weight)
 
         self.cnn_layer = nn.Sequential(
             self.conv1, self.relu,
@@ -64,14 +59,12 @@ class AnglePredictor(nn.Module):
             self.conv3, self.relu,
             self.flatten
         )
-        self.fc_layer = nn.Sequential(
-            self.fc4, self.relu, self.fc5
-        )
 
-    def forward(self, x):
-        x = self.cnn_layer(x)
-        x = self.fc_layer(x)
-        return x
+    def forward(self, image, action_class_onehot):
+        features = self.cnn_layer(image)
+        x = torch.cat([features, action_class_onehot], dim=1)
+        x = self.relu(self.fc4(x))
+        return self.fc5(x)
 
 
 class Training:
@@ -81,11 +74,14 @@ class Training:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         data = torch.load(self.dataset_path)
-        images, angles = data['images'], data['angles']
-        dataset = TensorDataset(images, angles)
+        images, angles, actions = data['images'], data['angles'], data['actions']
+        n_action_classes = max(actions).item() + 1
+
+        onehot_actions = torch.nn.functional.one_hot(actions, num_classes=n_action_classes).float()
+        dataset = TensorDataset(images, onehot_actions, angles)
         self.loader = DataLoader(dataset, batch_size=config.batch_size, shuffle=config.shuffle)
 
-        self.model = AnglePredictor(3, 1, config.image_height, config.image_width).to(self.device)
+        self.model = ConditionalAnglePredictor(3, 1, config.image_height, config.image_width, n_action_classes).to(self.device)
         self.criterion = nn.MSELoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=config.learning_rate)
         self.loss_log = []
@@ -96,8 +92,8 @@ class Training:
 
         for epoch in range(self.config.epochs):
             for batch in self.loader:
-                inputs, targets = [x.to(self.device) for x in batch]
-                preds = self.model(inputs)
+                images, action_onehots, targets = [x.to(self.device) for x in batch]
+                preds = self.model(images, action_onehots)
                 loss = self.criterion(preds, targets)
 
                 self.optimizer.zero_grad()
@@ -112,11 +108,14 @@ class Training:
         self.save_results()
 
     def save_results(self):
-        example_input = torch.randn(1, 3, self.config.image_height, self.config.image_width).to(self.device)
-        scripted_model = torch.jit.trace(self.model, example_input)
+        dummy_image = torch.randn(1, 3, self.config.image_height, self.config.image_width).to(self.device)
+        dummy_action = torch.zeros(1, 3).to(self.device)
+        dummy_action[0, 0] = 1
+        scripted_model = torch.jit.trace(self.model, (dummy_image, dummy_action))
+
         scripted_path = os.path.join(self.config.result_dir, self.config.model_filename)
         scripted_model.save(scripted_path)
-        print(f"🧠 学習済みモデルを保存しました: {scripted_path}")
+        print(f"🐜 学習済みモデルを保存しました: {scripted_path}")
 
         plt.figure()
         plt.plot(self.loss_log)
@@ -138,5 +137,5 @@ if __name__ == '__main__':
     dataset_path = augmentor.output_dataset
 
     config = Config()
-    trainer = Training(config, augmentor.output_dataset)
+    trainer = Training(config, dataset_path)
     trainer.train()
