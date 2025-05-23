@@ -55,7 +55,7 @@ class DataCollector(Node):
         self.latest_image_msg = None
 
         self.save_flag_sub = self.create_subscription(Bool, '/save', self.save_callback, 10)
-        self.cmd_mode_sub = self.create_subscription(String, "/cmd_route", self.command_mode_callback, 10)
+        self.cmd_route_sub = self.create_subscription(String, "/cmd_route", self.command_mode_callback, 10)
         self.image_sub = self.create_subscription(Image, self.image_topic, self.image_callback, 10)
         self.cmd_sub = self.create_subscription(Twist, self.cmd_vel_topic, self.cmd_callback, 10)
 

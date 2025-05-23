@@ -2,13 +2,15 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Joy
 from geometry_msgs.msg import Twist
-from std_msgs.msg import Empty, Bool
+from std_msgs.msg import Empty, Bool, String
 
 class Buttons:
     PS = 10
     Share = 8
     Circle = 1
     Options = 9
+    Square = 3
+    Triangle = 2
 
 class Axes:
     L_Y = 1
@@ -27,7 +29,7 @@ class ControllerNode(Node):
         self.is_autonomous = self.get_parameter('autonomous_flag').value
         self.is_save = False
 
-        self.prev_buttons = [0] * 12  # ボタン数を仮定して初期化
+        self.prev_buttons = [0] * 13  # 必要に応じてボタン数を増やす
 
         qos = 10
         self.publisher_vel = self.create_publisher(Twist, 'cmd_vel', qos)
@@ -36,13 +38,9 @@ class ControllerNode(Node):
         self.publisher_save = self.create_publisher(Bool, 'save', qos)
         self.publisher_autonomous = self.create_publisher(Bool, 'autonomous', qos)
         self.publisher_nav_start = self.create_publisher(Empty, 'nav_start', qos)
+        self.publisher_action_command = self.create_publisher(String, 'cmd_route', qos)
 
-        self.subscription_joy = self.create_subscription(
-            Joy,
-            'joy',
-            self.joy_callback,
-            qos
-        )
+        self.subscription_joy = self.create_subscription(Joy, 'joy', self.joy_callback, qos)
 
         self.publisher_restart.publish(Empty())
 
@@ -60,7 +58,6 @@ class ControllerNode(Node):
             self.publisher_save.publish(msg_save)
             self.get_logger().info(f'データ収集フラグ: {self.is_save}')
 
-        # Shareボタン → 自律 / 手動 切り替え
         if is_pressed(Buttons.Share):
             self.is_autonomous = not self.is_autonomous
             msg_autonomous = Bool()
@@ -68,9 +65,14 @@ class ControllerNode(Node):
             self.publisher_autonomous.publish(msg_autonomous)
             self.get_logger().info(f'自動フラグ: {self.is_autonomous}')
 
+        if is_pressed(Buttons.Square):
+            self._publish_route_command('left')
+
+        if is_pressed(Buttons.Triangle):
+            self._publish_route_command('straight')
+
         if is_pressed(Buttons.Circle):
-            self.publisher_nav_start.publish(Empty())
-            self.get_logger().info('自律走行開始')
+            self._publish_route_command('right')
 
         if not self.is_autonomous:
             twist = Twist()
@@ -78,8 +80,13 @@ class ControllerNode(Node):
             twist.angular.z = self.angular_max_vel * axes[Axes.R_X]
             self.publisher_vel.publish(twist)
 
-        # ボタン状態を更新
         self.prev_buttons = list(buttons)
+
+    def _publish_route_command(self, command: str):
+        msg = String()
+        msg.data = command
+        self.publisher_action_command.publish(msg)
+        self.get_logger().info(f'ルート指令送信: {command}')
 
 
 def main(args=None):
