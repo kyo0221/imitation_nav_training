@@ -5,12 +5,16 @@ from geometry_msgs.msg import Twist
 from std_msgs.msg import Empty, Bool, String
 
 class Buttons:
-    PS = 10
-    Share = 8
     Circle = 1
-    Options = 9
-    Square = 3
     Triangle = 2
+    Square = 3
+    L1 = 4
+    R1 = 5
+    L2 = 6
+    R2 = 7
+    Share = 8
+    Options = 9
+    PS = 10
 
 class Axes:
     L_Y = 1
@@ -29,7 +33,9 @@ class ControllerNode(Node):
         self.is_autonomous = self.get_parameter('autonomous_flag').value
         self.is_save = False
 
-        self.prev_buttons = [0] * 13  # 必要に応じてボタン数を増やす
+        self.prev_buttons = [0] * 13
+        self.prev_left_pressed = False
+        self.prev_right_pressed = False
 
         qos = 10
         self.publisher_vel = self.create_publisher(Twist, 'cmd_vel', qos)
@@ -41,7 +47,6 @@ class ControllerNode(Node):
         self.publisher_action_command = self.create_publisher(String, 'cmd_route', qos)
 
         self.subscription_joy = self.create_subscription(Joy, 'joy', self.joy_callback, qos)
-
         self.publisher_restart.publish(Empty())
 
     def joy_callback(self, msg: Joy):
@@ -65,14 +70,22 @@ class ControllerNode(Node):
             self.publisher_autonomous.publish(msg_autonomous)
             self.get_logger().info(f'自動フラグ: {self.is_autonomous}')
 
-        if is_pressed(Buttons.Square):
-            self._publish_route_command('left')
-
         if is_pressed(Buttons.Triangle):
             self._publish_route_command('straight')
 
-        if is_pressed(Buttons.Circle):
+        left_pressed = buttons[Buttons.L1] == 1 or buttons[Buttons.L2] == 1
+        if left_pressed and not self.prev_left_pressed:
+            self._publish_route_command('left')
+        elif not left_pressed and self.prev_left_pressed:
+            self._publish_route_command('straight')
+        self.prev_left_pressed = left_pressed
+
+        right_pressed = buttons[Buttons.R1] == 1 or buttons[Buttons.R2] == 1
+        if right_pressed and not self.prev_right_pressed:
             self._publish_route_command('right')
+        elif not right_pressed and self.prev_right_pressed:
+            self._publish_route_command('straight')
+        self.prev_right_pressed = right_pressed
 
         if not self.is_autonomous:
             twist = Twist()
