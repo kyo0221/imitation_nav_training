@@ -45,6 +45,7 @@ class ControllerNode(Node):
         self.publisher_autonomous = self.create_publisher(Bool, 'autonomous', qos)
         self.publisher_nav_start = self.create_publisher(Empty, 'nav_start', qos)
         self.publisher_action_command = self.create_publisher(String, 'cmd_route', qos)
+        self.publisher_save_image = self.create_publisher(Empty, 'save_image', qos)
 
         self.subscription_joy = self.create_subscription(Joy, 'joy', self.joy_callback, qos)
         self.publisher_restart.publish(Empty())
@@ -76,15 +77,19 @@ class ControllerNode(Node):
         left_pressed = buttons[Buttons.L1] == 1 or buttons[Buttons.L2] == 1
         if left_pressed and not self.prev_left_pressed:
             self._publish_route_command('left')
+            self.publisher_save_image.publish(Empty())
         elif not left_pressed and self.prev_left_pressed:
             self._publish_route_command('straight')
+            self.publisher_save_image.publish(Empty())
         self.prev_left_pressed = left_pressed
 
         right_pressed = buttons[Buttons.R1] == 1 or buttons[Buttons.R2] == 1
         if right_pressed and not self.prev_right_pressed:
             self._publish_route_command('right')
+            self.publisher_save_image.publish(Empty())
         elif not right_pressed and self.prev_right_pressed:
             self._publish_route_command('straight')
+            self.publisher_save_image.publish(Empty())
         self.prev_right_pressed = right_pressed
 
         if not self.is_autonomous:

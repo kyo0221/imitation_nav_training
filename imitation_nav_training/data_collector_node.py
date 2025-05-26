@@ -2,7 +2,7 @@ import os
 import sys
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Empty, Bool, String
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import Twist
 
@@ -37,6 +37,9 @@ class DataCollector(Node):
         self.save_log_path = os.path.join(pkg_dir, '..', 'logs')
         self.save_path = os.path.abspath(self.save_log_path) + '/' + self.log_name
 
+        self.match_img_dir = os.path.join(self.save_log_path, 'matching_images')
+        os.makedirs(self.match_img_dir, exist_ok=True)
+
         self.bridge = CvBridge()
         self.images = []
         self.ang_vels = []
@@ -54,8 +57,13 @@ class DataCollector(Node):
         self.data_saved = False
         self.latest_image_msg = None
 
+        self.cv_resized_image = None
+        self.image_save_counter = 1
+
         self.save_flag_sub = self.create_subscription(Bool, '/save', self.save_callback, 10)
         self.cmd_route_sub = self.create_subscription(String, "/cmd_route", self.command_mode_callback, 10)
+        self.cmd_save_image_sub = self.create_subscription(Empty, "/save_image", self.save_image_callback, 10)
+
         self.image_sub = self.create_subscription(Image, self.image_topic, self.image_callback, 10)
         self.cmd_sub = self.create_subscription(Twist, self.cmd_vel_topic, self.cmd_callback, 10)
 
@@ -72,7 +80,7 @@ class DataCollector(Node):
             self.get_logger().info("💾 Save flag received, saving data...")
 
         if len(self.images) and not msg.data:
-            self.data_argmentation()
+            self.data_augmentation()
             self.save_data()
             self.data_saved = True
 
@@ -82,6 +90,19 @@ class DataCollector(Node):
         else:
             self.get_logger().warn(f"Unknown command_mode received: {msg.data}, defaulting to 'straight'")
             self.command_mode = "straight"
+
+    def save_image_callback(self, msg: Empty):
+        if self.cv_resized_image is None:
+            self.get_logger().warn("No resized image available to save.")
+            return
+
+        img_path = os.path.join(self.match_img_dir, f"img{self.image_save_counter}.png")
+        try:
+            cv2.imwrite(img_path, self.cv_resized_image)
+            self.get_logger().info(f"💾 Saved image to {img_path}")
+            self.image_save_counter += 1
+        except Exception as e:
+            self.get_logger().error(f"❌ Failed to save image: {e}")
 
     def image_callback(self, msg):
         self.latest_image_msg = msg
@@ -93,6 +114,7 @@ class DataCollector(Node):
         try:
             cv_image = self.bridge.imgmsg_to_cv2(self.latest_image_msg, desired_encoding='bgr8')
             resized = cv2.resize(cv_image, (self.img_width, self.img_height))
+            self.cv_resized_image = (resized * 1).astype(np.uint8)
             tensor_image = torch.tensor(resized, dtype=torch.float32).permute(2, 0, 1) / 255.0
 
             self.images.append(tensor_image)
@@ -106,7 +128,7 @@ class DataCollector(Node):
         except Exception as e:
             self.get_logger().error(f"[collect] Image processing failed: {e}")
 
-    def data_argmentation(self):
+    def data_augmentation(self):
         num_augmented = 0
         angle_offset_deg = 5
         vel_offset = 0.2
