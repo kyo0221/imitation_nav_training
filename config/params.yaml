@@ -13,7 +13,7 @@ data_collector:
   ros__parameters:
     image_topic: "/image_raw"
     cmd_vel_topic: "/cmd_vel"
-    image_height: 150
-    image_width: 240
+    image_height: 88
+    image_width: 200
     log_name: "dataset.pt"
     max_data_count: 100000

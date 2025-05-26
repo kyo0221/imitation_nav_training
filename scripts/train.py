@@ -33,38 +33,64 @@ class Config:
 class ConditionalAnglePredictor(nn.Module):
     def __init__(self, n_channel, n_out, input_height, input_width, n_action_classes):
         super().__init__()
-        self.conv1 = nn.Conv2d(n_channel, 32, kernel_size=8, stride=4)
+        self.conv1 = nn.Conv2d(n_channel, 32, kernel_size=5, stride=2)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2)
-        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=2)
+        self.conv4 = nn.Conv2d(128, 256, kernel_size=3, stride=2)
+        self.conv5 = nn.Conv2d(256, 512, kernel_size=3, stride=2)
+
         self.relu = nn.ReLU(inplace=True)
         self.flatten = nn.Flatten()
 
         with torch.no_grad():
             dummy_input = torch.zeros(1, n_channel, input_height, input_width)
-            x = self.conv1(dummy_input)
-            x = self.relu(x)
-            x = self.conv2(x)
-            x = self.relu(x)
-            x = self.conv3(x)
-            x = self.relu(x)
+            x = self.relu(self.conv1(dummy_input))
+            x = self.relu(self.conv2(x))
+            x = self.relu(self.conv3(x))
+            x = self.relu(self.conv4(x))
+            x = self.relu(self.conv5(x))
             x = self.flatten(x)
             flattened_size = x.shape[1]
 
-        self.fc4 = nn.Linear(flattened_size + n_action_classes, 512)
-        self.fc5 = nn.Linear(512, n_out)
+        self.fc4 = nn.Linear(flattened_size, 512)
+        self.fc5 = nn.Linear(512, 512)
+        self.fc6 = nn.Linear(512, 512)
 
+        self.branches = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(512, 256),
+                self.relu,
+                nn.Linear(256, n_out)
+            ) for _ in range(n_action_classes)
+        ])
+
+        # CNNレイヤー構造
         self.cnn_layer = nn.Sequential(
             self.conv1, self.relu,
             self.conv2, self.relu,
             self.conv3, self.relu,
+            self.conv4, self.relu,
+            self.conv5, self.relu,
             self.flatten
         )
 
-    def forward(self, image, action_class_onehot):
+    def forward(self, image, action_onehot):
         features = self.cnn_layer(image)
-        x = torch.cat([features, action_class_onehot], dim=1)
-        x = self.relu(self.fc4(x))
-        return self.fc5(x)
+        x = self.relu(self.fc4(features))
+        x = self.relu(self.fc5(x))
+        fc_out = self.relu(self.fc6(x))
+
+        batch_size = image.size(0)
+        action_indices = torch.argmax(action_onehot, dim=1)
+
+        output = torch.zeros(batch_size, self.branches[0][-1].out_features, device=image.device)
+        for idx, branch in enumerate(self.branches):
+            mask = (action_indices == idx)
+            if mask.any():
+                output[mask.nonzero(as_tuple=True)[0]] = branch(fc_out[mask.nonzero(as_tuple=True)[0]])
+
+
+        return output
 
 
 class Training:

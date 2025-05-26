@@ -73,6 +73,7 @@ class ControllerNode(Node):
 
         if is_pressed(Buttons.Triangle):
             self._publish_route_command('straight')
+            self.publisher_save_image.publish(Empty())
 
         left_pressed = buttons[Buttons.L1] == 1 or buttons[Buttons.L2] == 1
         if left_pressed and not self.prev_left_pressed:

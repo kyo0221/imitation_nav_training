@@ -1,5 +1,6 @@
 import os
 import sys
+import yaml
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Empty, Bool, String
@@ -40,6 +41,11 @@ class DataCollector(Node):
         self.match_img_dir = os.path.join(self.save_log_path, 'matching_images')
         os.makedirs(self.match_img_dir, exist_ok=True)
 
+        self.map_dir = os.path.join(self.save_log_path, 'maps')
+        os.makedirs(self.map_dir, exist_ok=True)
+        self.map_path = os.path.join(self.map_dir, 'map.yaml')
+
+        self.node_counter = 0  # ノードIDカウンタ
         self.bridge = CvBridge()
         self.images = []
         self.ang_vels = []
@@ -90,6 +96,35 @@ class DataCollector(Node):
         else:
             self.get_logger().warn(f"Unknown command_mode received: {msg.data}, defaulting to 'straight'")
             self.command_mode = "straight"
+
+        try:
+            new_edge = {
+                'edge': {
+                    'ID': self.node_counter,
+                    'action': self.command_mode
+                }
+            }
+
+            if os.path.exists(self.map_path):
+                with open(self.map_path, 'r') as f:
+                    map_data = yaml.safe_load(f) or {}
+            else:
+                map_data = {}
+
+            if 'map_list' not in map_data or map_data['map_list'] is None:
+                map_data['map_list'] = []
+
+            map_data['map_list'].append(new_edge)
+
+            with open(self.map_path, 'w') as f:
+                yaml.dump(map_data, f, sort_keys=False)
+
+            self.get_logger().info(f"🗺️ 追記: ID={self.node_counter}, action={self.command_mode}")
+            self.node_counter += 1
+
+        except Exception as e:
+            self.get_logger().error(f"⚠️ Failed to write to map.yaml: {e}")
+
 
     def save_image_callback(self, msg: Empty):
         if self.cv_resized_image is None:
