@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from torch.utils.data import TensorDataset, DataLoader
 from ament_index_python.packages import get_package_share_directory
 from augment.gamma_augment import GammaAugmentor
+from augment.augmix_augment import AugMixAugmentor
 
 
 class Config:
@@ -25,10 +26,12 @@ class Config:
         self.epochs = config['epochs']
         self.learning_rate = config['learning_rate']
         self.shuffle = config.get('shuffle', True)
+        self.resample = config.get('resample', True)
         self.image_height = config['image_height']
         self.image_width = config['image_width']
         self.model_filename = config['model_filename']
         self.class_names = [name.strip() for name in config['action_classes'][0].split(',')]
+        self.augment_method = config['augment']
 
 
 class ConditionalAnglePredictor(nn.Module):
@@ -133,10 +136,6 @@ class Training:
         self.save_results()
 
     def save_results(self):
-        # dummy_image = torch.randn(1, 3, self.config.image_height, self.config.image_width).to(self.device)
-        # dummy_action = torch.zeros(1, len(self.config.class_names)).to(self.device)
-        # dummy_action[0, 0] = 1
-
         scripted_model = torch.jit.script(self.model)
 
         scripted_path = os.path.join(self.config.result_dir, self.config.model_filename)
@@ -211,12 +210,21 @@ if __name__ == '__main__':
     yaml_path = os.path.join(config.package_dir, '..', 'config', 'train_params.yaml')
     config_dict = yaml.safe_load(open(yaml_path))
 
-    if config_dict['train'].get('resample', False):
+    if config.resample:
         dataset_path = Sampling.resample_dataset_balanced(dataset_path, config.class_names)
 
-    augmentor = GammaAugmentor(input_dataset_path=dataset_path)
-    augmentor.augment()
-    dataset_path = augmentor.output_dataset
+    if config.augment_method == "none" or config.augment_method == "None":
+        pass
+    elif config.augment_method == "gamma":
+        augmentor = GammaAugmentor(input_dataset_path=dataset_path)
+        augmentor.augment()
+        dataset_path = augmentor.output_dataset
+    elif config.augment_method == "augmix":
+        augmentor = AugMixAugmentor(input_dataset_path=dataset_path)
+        augmentor.augment()
+        dataset_path = augmentor.output_dataset
+    else:
+        raise ValueError(f"Unknown augmentation method: {config.augment_method}")
 
     trainer = Training(config, dataset_path)
     trainer.train()
