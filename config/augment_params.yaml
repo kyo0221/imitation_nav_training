@@ -8,8 +8,8 @@ gamma:
 augmix:
   input_dataset: hoge.pt
   output_dataset: dataset_augmix.pt
-  num_augmented_samples: 6
-  severity: 0.1                         # 増強の強度を指定する. 値が大きいほど増強の効果が強くなる.
+  num_augmented_samples: 1
+  severity: 1                           # 増強の強度を指定する. 値が大きいほど増強の効果が強くなる.
   width: 3                              # 増強チェーンの幅を指定する. 値が大きいほど様々な増強操作が同時に適用される.
   depth: -1                             # 増強チェーンの深さを指定する. 値が大きいほど様々な増強操作が連続で適用される.
   alpha: 1.0                            # 操作を混合する際の重みに使用する. 値が小さい場合, 操作が混合されにくくなる.

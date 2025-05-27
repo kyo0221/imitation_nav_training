@@ -150,17 +150,23 @@ class AugMixAugmentor:
         self.alpha = params.get('alpha', 1.0)
 
     def augment(self):
-        print(f"\U0001F4E6 Loading dataset from {self.input_dataset}")
+        print(f"📦 Loading dataset from {self.input_dataset}")
         data = torch.load(self.input_dataset)
         images = data['images']
         angles = data['angles']
+        actions = data.get('actions')  # optional
+        action_classes = data.get('action_classes')  # optional
 
         new_images = []
         new_angles = []
+        new_actions = [] if actions is not None else None
 
-        for idx, (img_tensor, angle) in enumerate(tqdm(zip(images, angles), total=len(images), desc="AugMixing")):
+        for idx, img_tuple in enumerate(tqdm(zip(images, angles), total=len(images), desc="AugMixing")):
+            img_tensor, angle = img_tuple
             new_images.append(img_tensor)
             new_angles.append(angle)
+            if new_actions is not None:
+                new_actions.append(actions[idx])
 
             img_np = (img_tensor.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
 
@@ -170,13 +176,25 @@ class AugMixAugmentor:
 
                 new_images.append(aug_tensor)
                 new_angles.append(angle.clone())
+                if new_actions is not None:
+                    new_actions.append(actions[idx].clone())
 
                 if self.visualize_flag:
                     save_path = os.path.join(self.visualize_dir, f"{idx:05d}_aug{i}_augmix.png")
                     cv2.imwrite(save_path, aug_img)
 
-        print(f"\U0001F4CE Saving augmented dataset to {self.output_dataset}")
-        torch.save({'images': torch.stack(new_images), 'angles': torch.stack(new_angles)}, self.output_dataset)
+        print(f"📎 Saving augmented dataset to {self.output_dataset}")
+        save_dict = {
+            'images': torch.stack(new_images),
+            'angles': torch.stack(new_angles)
+        }
+
+        if new_actions is not None:
+            save_dict['actions'] = torch.stack(new_actions)
+        if action_classes is not None:
+            save_dict['action_classes'] = action_classes
+
+        torch.save(save_dict, self.output_dataset)
         print(f"✅ Augmentation complete: {len(images)} → {len(new_images)} samples")
 
 
