@@ -28,6 +28,7 @@ class Config:
         self.image_height = config['image_height']
         self.image_width = config['image_width']
         self.model_filename = config['model_filename']
+        self.class_names = [name.strip() for name in config['action_classes'][0].split(',')]
 
 
 class ConditionalAnglePredictor(nn.Module):
@@ -64,7 +65,6 @@ class ConditionalAnglePredictor(nn.Module):
             ) for _ in range(n_action_classes)
         ])
 
-        # CNNレイヤー構造
         self.cnn_layer = nn.Sequential(
             self.conv1, self.relu,
             self.conv2, self.relu,
@@ -85,10 +85,9 @@ class ConditionalAnglePredictor(nn.Module):
 
         output = torch.zeros(batch_size, self.branches[0][-1].out_features, device=image.device)
         for idx, branch in enumerate(self.branches):
-            mask = (action_indices == idx)
-            if mask.any():
-                output[mask.nonzero(as_tuple=True)[0]] = branch(fc_out[mask.nonzero(as_tuple=True)[0]])
-
+            selected_idx = (action_indices == idx).nonzero().squeeze(1)
+            if selected_idx.numel() > 0:
+                output[selected_idx] = branch(fc_out[selected_idx])
 
         return output
 
@@ -101,7 +100,7 @@ class Training:
 
         data = torch.load(self.dataset_path)
         images, angles, actions = data['images'], data['angles'], data['actions']
-        n_action_classes = max(actions).item() + 1
+        n_action_classes = len(config.class_names)
 
         onehot_actions = torch.nn.functional.one_hot(actions, num_classes=n_action_classes).float()
         dataset = TensorDataset(images, onehot_actions, angles)
@@ -134,10 +133,11 @@ class Training:
         self.save_results()
 
     def save_results(self):
-        dummy_image = torch.randn(1, 3, self.config.image_height, self.config.image_width).to(self.device)
-        dummy_action = torch.zeros(1, 3).to(self.device)
-        dummy_action[0, 0] = 1
-        scripted_model = torch.jit.trace(self.model, (dummy_image, dummy_action))
+        # dummy_image = torch.randn(1, 3, self.config.image_height, self.config.image_width).to(self.device)
+        # dummy_action = torch.zeros(1, len(self.config.class_names)).to(self.device)
+        # dummy_action[0, 0] = 1
+
+        scripted_model = torch.jit.script(self.model)
 
         scripted_path = os.path.join(self.config.result_dir, self.config.model_filename)
         scripted_model.save(scripted_path)
@@ -148,9 +148,56 @@ class Training:
         plt.title("Training Loss")
         plt.xlabel("Iteration")
         plt.ylabel("Loss")
-        loss_plot_path = os.path.join(self.config.result_dir, 'loss_curve.png')
-        plt.savefig(loss_plot_path)
-        print(f"📈 损失推移グラフを保存しました: {loss_plot_path}")
+        plt.savefig(os.path.join(self.config.result_dir, 'loss_curve.png'))
+        print("📈 学習曲線を保存しました")
+
+
+class Sampling:
+    def resample_dataset_balanced(dataset_path: str, class_names: list) -> str:
+        data = torch.load(dataset_path)
+        images, angles, actions = data['images'], data['angles'], data['actions']
+
+        class_to_indices = {
+            cls: (actions == idx).nonzero(as_tuple=True)[0]
+            for idx, cls in enumerate(class_names)
+            if (actions == idx).sum().item() > 0
+        }
+
+        if not class_to_indices:
+            raise ValueError("❌ 全ての行動クラスにデータが存在しません")
+
+        max_count = max(len(idxs) for idxs in class_to_indices.values())
+
+        balanced_images = []
+        balanced_angles = []
+        balanced_actions = []
+
+        for idx, cls in enumerate(class_names):
+            if cls not in class_to_indices:
+                continue
+            indices = class_to_indices[cls]
+            repeats = max_count // len(indices)
+            remainder = max_count % len(indices)
+
+            resampled_idxs = indices.repeat(repeats)
+            remainder_idxs = indices[torch.randperm(len(indices))[:remainder]]
+            final_idxs = torch.cat([resampled_idxs, remainder_idxs])
+
+            balanced_images.append(images[final_idxs])
+            balanced_angles.append(angles[final_idxs])
+            balanced_actions.append(actions[final_idxs])
+
+        balanced_data = {
+            'images': torch.cat(balanced_images),
+            'angles': torch.cat(balanced_angles),
+            'actions': torch.cat(balanced_actions),
+            'action_classes': class_names
+        }
+
+        new_path = dataset_path.replace('.pt', '_resampled.pt')
+        torch.save(balanced_data, new_path)
+        print(f"📊 リサンプリング済みデータ保存: {new_path}")
+        return new_path
 
 
 if __name__ == '__main__':
@@ -158,10 +205,18 @@ if __name__ == '__main__':
     parser.add_argument('dataset', type=str, help='Path to dataset .pt file')
     args = parser.parse_args()
 
-    augmentor = GammaAugmentor(input_dataset_path=args.dataset)
+    config = Config()
+    dataset_path = args.dataset
+
+    yaml_path = os.path.join(config.package_dir, '..', 'config', 'train_params.yaml')
+    config_dict = yaml.safe_load(open(yaml_path))
+
+    if config_dict['train'].get('resample', False):
+        dataset_path = Sampling.resample_dataset_balanced(dataset_path, config.class_names)
+
+    augmentor = GammaAugmentor(input_dataset_path=dataset_path)
     augmentor.augment()
     dataset_path = augmentor.output_dataset
 
-    config = Config()
     trainer = Training(config, dataset_path)
     trainer.train()
