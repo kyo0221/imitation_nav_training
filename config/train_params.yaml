@@ -1,7 +1,7 @@
 train:
   batch_size: 8          # バッチサイズ（1ステップあたりのサンプル数）
-  epochs: 20               # エポック数（全データを何周するか）
-  learning_rate: 0.0001   # 学習率（Adam最適化器に渡す）
+  epochs: 50               # エポック数（全データを何周するか）
+  learning_rate: 0.0002   # 学習率（Adam最適化器に渡す）
   shuffle: true           # データローダのシャッフル設定（true 推奨）
   resample: true          # 各行動毎のリサンプリング
   image_height: 88

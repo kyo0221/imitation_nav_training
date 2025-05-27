@@ -16,4 +16,5 @@ data_collector:
     image_height: 88
     image_width: 200
     log_name: "dataset.pt"
-    max_data_count: 100000
+    max_data_count: 1000000
+    interval_ms: 200
