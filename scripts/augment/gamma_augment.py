@@ -25,7 +25,7 @@ class GammaAugmentor:
 
     def _load_config(self):
         with open(self.config_path, 'r') as f:
-            params = yaml.safe_load(f)['argment']
+            params = yaml.safe_load(f)['gamma']
 
         self.input_dataset = os.path.join(self.logs_dir, params['input_dataset'])
         self.output_dataset = os.path.join(self.logs_dir, params['output_dataset'])

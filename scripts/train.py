@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 from torch.utils.data import TensorDataset, DataLoader
 from ament_index_python.packages import get_package_share_directory
 from augment.gamma_augment import GammaAugmentor
+from augment.augmix_augment import AugMixAugmentor
 
 
 class Config:
@@ -28,6 +29,7 @@ class Config:
         self.image_height = config['image_height']
         self.image_width = config['image_width']
         self.model_filename = config['model_filename']
+        self.augment_method = config['augment']
 
 
 class AnglePredictor(nn.Module):
@@ -132,11 +134,21 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('dataset', type=str, help='Path to dataset .pt file')
     args = parser.parse_args()
-
-    augmentor = GammaAugmentor(input_dataset_path=args.dataset)
-    augmentor.augment()
-    dataset_path = augmentor.output_dataset
-
     config = Config()
-    trainer = Training(config, augmentor.output_dataset)
+
+
+    if config.augment_method == "none" or config.augment_method == "None":
+        dataset_path = args.dataset
+    elif config.augment_method == "gamma":
+        augmentor = GammaAugmentor(input_dataset_path=args.dataset)
+        augmentor.augment()
+        dataset_path = augmentor.output_dataset
+    elif config.augment_method == "augmix":
+        augmentor = AugMixAugmentor(input_dataset_path=args.dataset)
+        augmentor.augment()
+        dataset_path = augmentor.output_dataset
+    else:
+        raise ValueError(f"Unknown augmentation method: {config.augment_method}")
+
+    trainer = Training(config, dataset_path)
     trainer.train()

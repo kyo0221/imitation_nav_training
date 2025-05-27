@@ -6,3 +6,4 @@ train:
   image_height: 88
   image_width: 200
   model_filename: model.pt # 出力する学習済みモデルの名前
+  augment: augmix # [None, gamma, augmix]
