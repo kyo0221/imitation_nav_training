@@ -57,7 +57,7 @@ class ControllerNode(Node):
         def is_pressed(idx):
             return buttons[idx] == 1 and self.prev_buttons[idx] == 0
 
-        if is_pressed(Buttons.Options):
+        if is_pressed(Buttons.Options) or is_pressed(Buttons.Circle):
             self.is_save = not self.is_save
             msg_save = Bool()
             msg_save.data = self.is_save

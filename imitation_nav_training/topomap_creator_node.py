@@ -1,7 +1,12 @@
 import os
 import yaml
+import torch
 import math
+from PIL import Image
 from nav_msgs.msg import Odometry
+from torchvision import transforms
+
+from .placenet import PlaceNet
 
 class TopologicalMapCreator:
     def __init__(self, map_path: str, image_dir: str):
@@ -12,15 +17,35 @@ class TopologicalMapCreator:
         self.node_id = 0
         self.nodes = []
 
-    def add_node(self, image_filename: str, position: list, yaw: float, action: str):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model = PlaceNet().to(self.device)
+        self.model.eval()
+
+        self.transform = transforms.Compose([
+            transforms.Resize((88, 200)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406],
+                                 [0.229, 0.224, 0.225]),
+        ])
+
+    def add_node(self, image_filename: str, action: str):
+        image_path = os.path.join(self.image_dir, image_filename)
+        if not os.path.exists(image_path):
+            raise FileNotFoundError(f"Image not found: {image_path}")
+
+        image = Image.open(image_path).convert("RGB")
+        tensor = self.transform(image).unsqueeze(0).to(self.device)
+
+        with torch.no_grad():
+            feature = self.model(tensor).cpu().squeeze().tolist()
+
         node_entry = {
             'id': self.node_id,
             'image': image_filename,
-            'position': position,
-            'yaw': yaw,
+            'feature': feature,
             'edges': [
                 {
-                    'target': self.node_id + 1,  # provisional target, may be revised in post-processing
+                    'target': self.node_id + 1,
                     'action': action
                 }
             ]
@@ -38,7 +63,6 @@ class TopologicalMapCreator:
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
         q = msg.pose.pose.orientation
-        # convert quaternion to yaw
         siny_cosp = 2 * (q.w * q.z + q.x * q.y)
         cosy_cosp = 1 - 2 * (q.y * q.y + q.z * q.z)
         yaw = math.atan2(siny_cosp, cosy_cosp)
