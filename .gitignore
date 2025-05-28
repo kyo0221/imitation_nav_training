@@ -1,2 +1,4 @@
-logs/
+logs/result/
+logs/topo_map/
+logs/*.pt
 .vscode/

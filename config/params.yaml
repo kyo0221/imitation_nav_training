@@ -12,9 +12,11 @@ controller:
 data_collector:
   ros__parameters:
     image_topic: "/image_raw"
+    odom_topic: "/odometry"
     cmd_vel_topic: "/cmd_vel"
     image_height: 88
     image_width: 200
     log_name: "dataset.pt"
     max_data_count: 1000000
     interval_ms: 200
+    node_save_distance: 5.0
