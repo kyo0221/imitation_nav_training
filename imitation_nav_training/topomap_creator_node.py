@@ -4,28 +4,33 @@ import torch
 import math
 from PIL import Image
 from nav_msgs.msg import Odometry
-from torchvision import transforms
+from torchvision.transforms import Compose, Resize, ToTensor, Normalize
 
 from .placenet import PlaceNet
 
 class TopologicalMapCreator:
-    def __init__(self, map_path: str, image_dir: str):
+    def __init__(self, map_path: str, image_dir: str, weight_path: str):
         self.map_path = map_path
         self.image_dir = image_dir
+        self.weight_path = weight_path
         os.makedirs(image_dir, exist_ok=True)
         os.makedirs(os.path.dirname(map_path), exist_ok=True)
         self.node_id = 0
         self.nodes = []
 
+        self.config = {'checkpoint_path':self.weight_path}
+
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model = PlaceNet().to(self.device)
+
+        self.model = PlaceNet(self.config)
+        self.model.to(self.device)
         self.model.eval()
 
-        self.transform = transforms.Compose([
-            transforms.Resize((88, 200)),
-            transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406],
-                                 [0.229, 0.224, 0.225]),
+        # 入力画像の前処理 85x85<-学習済みモデルと同様のサイズに調整
+        self.transform = Compose([
+            Resize((85, 85)),
+            ToTensor(),
+            Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         ])
 
     def add_node(self, image_filename: str, action: str):
@@ -37,7 +42,9 @@ class TopologicalMapCreator:
         tensor = self.transform(image).unsqueeze(0).to(self.device)
 
         with torch.no_grad():
-            feature = self.model(tensor).cpu().squeeze().tolist()
+            outputs = self.model({'image': tensor})
+            feature_tensor = outputs['global_descriptor']
+            feature = feature_tensor.cpu().squeeze().tolist()
 
         node_entry = {
             'id': self.node_id,

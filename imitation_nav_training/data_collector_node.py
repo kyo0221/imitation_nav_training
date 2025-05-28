@@ -26,7 +26,8 @@ class DataCollector(Node):
         self.declare_parameter('image_height', 88)
         self.declare_parameter('log_name', 'dataset.pt')
         self.declare_parameter('max_data_count', 50000)
-        self.declare_parameter('interval_ms', 500)
+        self.declare_parameter('velocity_mps', 0.5)  # assumed average velocity
+        self.declare_parameter('distance_threshold', 5.0)  # meters to travel before saving
 
         self.image_topic = self.get_parameter('image_topic').get_parameter_value().string_value
         self.cmd_vel_topic = self.get_parameter('cmd_vel_topic').get_parameter_value().string_value
@@ -34,7 +35,8 @@ class DataCollector(Node):
         self.img_height = self.get_parameter('image_height').get_parameter_value().integer_value
         self.log_name = self.get_parameter('log_name').get_parameter_value().string_value
         self.max_data_count = self.get_parameter('max_data_count').get_parameter_value().integer_value
-        self.interval_ms = self.get_parameter('interval_ms').get_parameter_value().integer_value
+        self.velocity_mps = self.get_parameter('velocity_mps').get_parameter_value().double_value
+        self.distance_threshold = self.get_parameter('distance_threshold').get_parameter_value().double_value
 
         self.save_log_path = os.path.join(pkg_dir, '..', 'logs')
         self.save_path = os.path.abspath(self.save_log_path) + '/' + self.log_name
@@ -44,8 +46,9 @@ class DataCollector(Node):
         self.topo_map_yaml = os.path.join(self.topo_map_dir, 'topomap.yaml')
         self.image_dir = os.path.join(self.topo_map_dir, 'images')
         os.makedirs(self.image_dir, exist_ok=True)
+        self.weight_path = os.path.join(pkg_dir, '..', 'weights', 'efficientnet_85x85.pth')
 
-        self.map_creator = TopologicalMapCreator(self.topo_map_yaml, self.image_dir)
+        self.map_creator = TopologicalMapCreator(self.topo_map_yaml, self.image_dir, self.weight_path)
 
         self.bridge = CvBridge()
         self.images = []
@@ -62,6 +65,7 @@ class DataCollector(Node):
 
         self.cv_resized_image = None
         self.image_save_counter = 1
+        self.accumulated_distance = 0.0
 
         self.save_flag_sub = self.create_subscription(Bool, '/save', self.save_callback, 10)
         self.cmd_route_sub = self.create_subscription(String, "/cmd_route", self.command_mode_callback, 10)
@@ -73,13 +77,15 @@ class DataCollector(Node):
         self.get_logger().info(f"Subscribed to {self.image_topic}, {self.cmd_vel_topic}, and /cmd_route")
         self.get_logger().info(f"Saving to {self.save_log_path} with max count {self.max_data_count}")
 
-        self.timer = self.create_timer(self.interval_ms / 1000.0, self.periodic_collect)
+        self.timer = self.create_timer(0.1, self.periodic_collect)
 
     def image_callback(self, msg):
         self.latest_image_msg = msg
 
     def cmd_callback(self, msg):
         self.last_ang_vel = msg.angular.z
+        lin_speed = msg.linear.x
+        self.accumulated_distance += lin_speed * 0.1
 
     def save_callback(self, msg):
         if msg.data and not self.data_saved:
@@ -98,6 +104,9 @@ class DataCollector(Node):
             self.command_mode = "straight"
 
     def save_image_callback(self, msg: Empty):
+        self.save_image()
+
+    def save_image(self):
         if self.cv_resized_image is None:
             self.get_logger().warn("No resized image available to save.")
             return
@@ -111,6 +120,7 @@ class DataCollector(Node):
 
             self.map_creator.add_node(img_name, self.command_mode)
             self.image_save_counter += 1
+            self.accumulated_distance = 0.0  # reset distance after saving
 
         except Exception as e:
             self.get_logger().error(f"❌ Failed to save image or add node: {e}")
@@ -128,6 +138,9 @@ class DataCollector(Node):
             self.images.append(tensor_image)
             self.ang_vels.append(torch.tensor([self.last_ang_vel], dtype=torch.float32))
             self.actions.append(torch.tensor([self.action_to_index[self.command_mode]], dtype=torch.long))
+
+            if self.accumulated_distance >= self.distance_threshold:
+                self.save_image()
 
             if len(self.images) >= self.max_data_count:
                 self.get_logger().info("Max data count reached.")

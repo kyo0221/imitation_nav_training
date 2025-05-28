@@ -2,19 +2,25 @@ import torch
 import sys
 import os
 
-# このファイルの親ディレクトリを取得（= scripts/ の親）
 base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-sys.path.insert(0, os.path.join(base_dir, 'imitation_nav_training'))
-from placenet import PlaceNet
+sys.path.insert(0, base_dir)
+
+from imitation_nav_training.placenet import PlaceNet
 
 def export_to_torchscript(output_path="placenet.pt"):
-    model = PlaceNet()
+    config = {
+        'backbone': 'EfficientNet_B0',
+        'fc_output_dim': 512,
+        'checkpoint_path': os.path.join(base_dir, "weights", "efficientnet_85x85.pth"),
+    }
+
+    model = PlaceNet(config)
     model.eval()
 
-    dummy_input = torch.randn(1, 3, 88, 200)
-
-    # TorchScript 形式に変換
-    traced_script_module = torch.jit.trace(model, dummy_input)
+    # BaseModel経由では data: dict -> PlaceNet.forward -> net(image) の構造なので
+    # model.net を直接 trace する
+    dummy_input = torch.randn(1, 3, 85, 85)  # 入力解像度に注意
+    traced_script_module = torch.jit.trace(model.net, dummy_input)
 
     traced_script_module.save(output_path)
     print(f"✅ TorchScript model exported to {output_path}")

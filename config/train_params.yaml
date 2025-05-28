@@ -1,12 +1,11 @@
 train:
   batch_size: 8          # バッチサイズ（1ステップあたりのサンプル数）
-  epochs: 50               # エポック数（全データを何周するか）
-  learning_rate: 0.0002   # 学習率（Adam最適化器に渡す）
   epochs: 10               # エポック数（全データを何周するか）
+  learning_rate: 0.0002   # 学習率（Adam最適化器に渡す）
   shuffle: true           # データローダのシャッフル設定（true 推奨）
   resample: true          # 各行動毎のリサンプリング. trueにすると各行動におけるデータ数が均一になるようにリサンプリングします.
   image_height: 88
   image_width: 200
   action_classes: ["straight, left, right"] # 条件付き模倣学習の制御指令
-  model_filename: model.pt # 出力する学習済みモデルの名前
+  model_filename: model_aug_2-3.pt # 出力する学習済みモデルの名前
   augment: augmix # [None, gamma, augmix]
