@@ -8,7 +8,7 @@ from tqdm import tqdm
 from ament_index_python.packages import get_package_share_directory
 
 class GammaAugmentor:
-    def __init__(self, config_path='config/augment_params.yaml', input_dataset_path=None):
+    def __init__(self, config_path='config/train_params.yaml', input_dataset=None):
         self.package_dir = os.path.dirname(os.path.realpath(__file__))
         self.logs_dir = os.path.abspath(os.path.join(self.package_dir, '..', '..', 'logs'))
         self.config_path = os.path.abspath(os.path.join(self.package_dir, '..', '..', config_path))
@@ -16,8 +16,8 @@ class GammaAugmentor:
 
         self._load_config()
 
-        if input_dataset_path is not None:
-            self.input_dataset = input_dataset_path
+        if input_dataset is not None:
+            self.input_dataset = input_dataset
 
         if self.visualize_flag:
             os.makedirs(self.visualize_dir, exist_ok=True)
@@ -26,8 +26,6 @@ class GammaAugmentor:
         with open(self.config_path, 'r') as f:
             params = yaml.safe_load(f)['gamma']
 
-        self.input_dataset = os.path.join(self.logs_dir, params['input_dataset'])
-        self.output_dataset = os.path.join(self.logs_dir, params['output_dataset'])
         self.gamma_range = params['gamma_range']
         self.num_augmented_samples = params['num_augmented_samples']
         self.visualize_flag = params.get('visualize_image', False)
@@ -41,22 +39,20 @@ class GammaAugmentor:
         return cv2.LUT(image, table)
 
     def augment(self):
-        print(f"📦 Loading dataset from {self.input_dataset}")
-        data = torch.load(self.input_dataset)
-        images = data['images']
-        angles = data['angles']
-        actions = data['actions']
+        print(f"📦 Running GammaAugmentor on {len(self.input_dataset)} samples")
 
         new_images = []
-        new_angles = []
         new_actions = []
+        new_angles = []
 
-        for idx, (img_tensor, angle, action) in enumerate(tqdm(zip(images, angles, actions), total=len(images), desc="Augmenting")):
-            new_images.append(img_tensor)
+        for idx in tqdm(range(len(self.input_dataset)), desc="GammaAugmenting"):
+            image, action_onehot, angle = self.input_dataset[idx]
+
+            new_images.append(image)
+            new_actions.append(action_onehot)
             new_angles.append(angle)
-            new_actions.append(action)
 
-            img_np = (img_tensor.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+            img_np = (image.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
 
             for i in range(self.num_augmented_samples):
                 gamma = random.uniform(*self.gamma_range)
@@ -64,21 +60,20 @@ class GammaAugmentor:
                 gamma_tensor = torch.tensor(gamma_img, dtype=torch.float32).permute(2, 0, 1) / 255.0
 
                 new_images.append(gamma_tensor)
+                new_actions.append(action_onehot.clone())
                 new_angles.append(angle.clone())
-                new_actions.append(action.clone())
 
                 if self.visualize_flag:
                     save_path = os.path.join(self.visualize_dir, f"{idx:05d}_aug{i}_gamma{gamma:.2f}.png")
                     cv2.imwrite(save_path, gamma_img)
 
-        print(f"💾 Saving augmented dataset to {self.output_dataset}")
-        torch.save({
-            'images': torch.stack(new_images),
-            'angles': torch.stack(new_angles),
-            'actions': torch.stack(new_actions)
-        }, self.output_dataset)
-        print(f"✅ Augmentation complete: {len(images)} → {len(new_images)} samples")
+        print(f"✅ Gamma augmentation complete: {len(new_images)} total samples")
+        return torch.utils.data.TensorDataset(
+            torch.stack(new_images),
+            torch.stack(new_actions),
+            torch.stack(new_angles)
+        )
+
 
 if __name__ == '__main__':
-    augmentor = GammaAugmentor()
-    augmentor.augment()
+    print("🔧 Please use this module by importing GammaAugmentor(input_dataset=...) from training script.")

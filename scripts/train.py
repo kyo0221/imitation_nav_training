@@ -5,10 +5,12 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import matplotlib.pyplot as plt
-from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.data import DataLoader
 from ament_index_python.packages import get_package_share_directory
+
 from augment.gamma_augment import GammaAugmentor
 from augment.augmix_augment import AugMixAugmentor
+from augment.imitation_dataset import ImitationDataset
 
 
 class Config:
@@ -26,7 +28,6 @@ class Config:
         self.epochs = config['epochs']
         self.learning_rate = config['learning_rate']
         self.shuffle = config.get('shuffle', True)
-        self.resample = config.get('resample', True)
         self.image_height = config['image_height']
         self.image_width = config['image_width']
         self.model_filename = config['model_filename']
@@ -96,20 +97,12 @@ class ConditionalAnglePredictor(nn.Module):
 
 
 class Training:
-    def __init__(self, config, dataset_path):
+    def __init__(self, config, dataset):
         self.config = config
-        self.dataset_path = dataset_path
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        data = torch.load(self.dataset_path)
-        images, angles, actions = data['images'], data['angles'], data['actions']
-        n_action_classes = len(config.class_names)
-
-        onehot_actions = torch.nn.functional.one_hot(actions, num_classes=n_action_classes).float()
-        dataset = TensorDataset(images, onehot_actions, angles)
         self.loader = DataLoader(dataset, batch_size=config.batch_size, shuffle=config.shuffle)
-
-        self.model = ConditionalAnglePredictor(3, 1, config.image_height, config.image_width, n_action_classes).to(self.device)
+        self.model = ConditionalAnglePredictor(3, 1, config.image_height, config.image_width, len(config.class_names)).to(self.device)
         self.criterion = nn.MSELoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=config.learning_rate)
         self.loss_log = []
@@ -137,10 +130,9 @@ class Training:
 
     def save_results(self):
         scripted_model = torch.jit.script(self.model)
-
         scripted_path = os.path.join(self.config.result_dir, self.config.model_filename)
         scripted_model.save(scripted_path)
-        print(f"🐜 学習済みモデルを保存しました: {scripted_path}")
+        print(f"\U0001f41c 学習済みモデルを保存しました: {scripted_path}")
 
         plt.figure()
         plt.plot(self.loss_log)
@@ -148,83 +140,36 @@ class Training:
         plt.xlabel("Iteration")
         plt.ylabel("Loss")
         plt.savefig(os.path.join(self.config.result_dir, 'loss_curve.png'))
-        print("📈 学習曲線を保存しました")
-
-
-class Sampling:
-    def resample_dataset_balanced(dataset_path: str, class_names: list) -> str:
-        data = torch.load(dataset_path)
-        images, angles, actions = data['images'], data['angles'], data['actions']
-
-        class_to_indices = {
-            cls: (actions == idx).nonzero(as_tuple=True)[0]
-            for idx, cls in enumerate(class_names)
-            if (actions == idx).sum().item() > 0
-        }
-
-        if not class_to_indices:
-            raise ValueError("❌ 全ての行動クラスにデータが存在しません")
-
-        max_count = max(len(idxs) for idxs in class_to_indices.values())
-
-        balanced_images = []
-        balanced_angles = []
-        balanced_actions = []
-
-        for idx, cls in enumerate(class_names):
-            if cls not in class_to_indices:
-                continue
-            indices = class_to_indices[cls]
-            repeats = max_count // len(indices)
-            remainder = max_count % len(indices)
-
-            resampled_idxs = indices.repeat(repeats)
-            remainder_idxs = indices[torch.randperm(len(indices))[:remainder]]
-            final_idxs = torch.cat([resampled_idxs, remainder_idxs])
-
-            balanced_images.append(images[final_idxs])
-            balanced_angles.append(angles[final_idxs])
-            balanced_actions.append(actions[final_idxs])
-
-        balanced_data = {
-            'images': torch.cat(balanced_images),
-            'angles': torch.cat(balanced_angles),
-            'actions': torch.cat(balanced_actions),
-            'action_classes': class_names
-        }
-
-        new_path = dataset_path.replace('.pt', '_resampled.pt')
-        torch.save(balanced_data, new_path)
-        print(f"📊 リサンプリング済みデータ保存: {new_path}")
-        return new_path
+        print("\U0001f4c8 学習曲線を保存しました")
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('dataset', type=str, help='Path to dataset .pt file')
+    parser.add_argument('dataset', type=str, help='Path to dataset directory (contains images/, angle/, action/)')
     args = parser.parse_args()
 
     config = Config()
-    dataset_path = args.dataset
+    dataset_dir = args.dataset
 
-    yaml_path = os.path.join(config.package_dir, '..', 'config', 'train_params.yaml')
-    config_dict = yaml.safe_load(open(yaml_path))
+    dataset = ImitationDataset(
+        dataset_dir=dataset_dir,
+        input_size=(config.image_height, config.image_width),
+        rotate_aug=True,
+        angle_offset_deg=5,
+        vel_offset=0.2,
+        n_action_classes=len(config.class_names)
+    )
 
-    if config.resample:
-        dataset_path = Sampling.resample_dataset_balanced(dataset_path, config.class_names)
-
-    if config.augment_method == "none" or config.augment_method == "None":
-        pass
-    elif config.augment_method == "gamma":
-        augmentor = GammaAugmentor(input_dataset_path=dataset_path)
-        augmentor.augment()
-        dataset_path = augmentor.output_dataset
+    if config.augment_method == "gamma":
+        augmentor = GammaAugmentor(input_dataset=dataset)
+        dataset = augmentor.augment()
     elif config.augment_method == "augmix":
-        augmentor = AugMixAugmentor(input_dataset_path=dataset_path)
-        augmentor.augment()
-        dataset_path = augmentor.output_dataset
+        augmentor = AugMixAugmentor(input_dataset=dataset)
+        dataset = augmentor.augment()
+    elif config.augment_method in ["none", "None"]:
+        pass
     else:
         raise ValueError(f"Unknown augmentation method: {config.augment_method}")
 
-    trainer = Training(config, dataset_path)
+    trainer = Training(config, dataset)
     trainer.train()

@@ -121,17 +121,14 @@ class augmentations:
 
 
 class AugMixAugmentor:
-    def __init__(self, config_path='config/augment_params.yaml', input_dataset_path=None):
+    def __init__(self, input_dataset, config_path='config/train_params.yaml'):
+        self.input_dataset = input_dataset
         self.package_dir = os.path.dirname(os.path.realpath(__file__))
         self.logs_dir = os.path.abspath(os.path.join(self.package_dir, '..', '..', 'logs'))
         self.config_path = os.path.abspath(os.path.join(self.package_dir, '..', '..', config_path))
         self.visualize_dir = os.path.join(self.logs_dir, 'visualize')
 
         self._load_config()
-
-        if input_dataset_path is not None:
-            self.input_dataset = input_dataset_path
-
         if self.visualize_flag:
             os.makedirs(self.visualize_dir, exist_ok=True)
 
@@ -139,8 +136,6 @@ class AugMixAugmentor:
         with open(self.config_path, 'r') as f:
             params = yaml.safe_load(f)['augmix']
 
-        self.input_dataset = os.path.join(self.logs_dir, params['input_dataset'])
-        self.output_dataset = os.path.join(self.logs_dir, params['output_dataset'])
         self.num_augmented_samples = params['num_augmented_samples']
         self.severity = params.get('severity', 3)
         self.width = params.get('width', 3)
@@ -150,52 +145,40 @@ class AugMixAugmentor:
         self.alpha = params.get('alpha', 1.0)
 
     def augment(self):
-        print(f"📦 Loading dataset from {self.input_dataset}")
-        data = torch.load(self.input_dataset)
-        images = data['images']
-        angles = data['angles']
-        actions = data.get('actions')  # optional
-        action_classes = data.get('action_classes')  # optional
-
+        print(f"📦 Running AugMix on {len(self.input_dataset)} samples")
         new_images = []
+        new_actions = []
         new_angles = []
-        new_actions = [] if actions is not None else None
 
-        for idx, img_tuple in enumerate(tqdm(zip(images, angles), total=len(images), desc="AugMixing")):
-            img_tensor, angle = img_tuple
-            new_images.append(img_tensor)
+        for idx in tqdm(range(len(self.input_dataset)), desc="AugMixing"):
+            image, action_onehot, angle = self.input_dataset[idx]
+
+            new_images.append(image)
+            new_actions.append(action_onehot)
             new_angles.append(angle)
-            if new_actions is not None:
-                new_actions.append(actions[idx])
 
-            img_np = (img_tensor.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+            img_np = (image.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
 
             for i in range(self.num_augmented_samples):
-                aug_img = augmentations.augmix(img_np, self.severity, self.width, self.depth, self.allowed_ops, self.alpha)
+                aug_img = augmentations.augmix(
+                    img_np, self.severity, self.width, self.depth,
+                    self.allowed_ops, self.alpha
+                )
                 aug_tensor = torch.tensor(aug_img, dtype=torch.float32).permute(2, 0, 1) / 255.0
 
                 new_images.append(aug_tensor)
+                new_actions.append(action_onehot.clone())
                 new_angles.append(angle.clone())
-                if new_actions is not None:
-                    new_actions.append(actions[idx].clone())
 
                 if self.visualize_flag:
                     save_path = os.path.join(self.visualize_dir, f"{idx:05d}_aug{i}_augmix.png")
                     cv2.imwrite(save_path, aug_img)
 
-        print(f"📎 Saving augmented dataset to {self.output_dataset}")
-        save_dict = {
-            'images': torch.stack(new_images),
-            'angles': torch.stack(new_angles)
-        }
-
-        if new_actions is not None:
-            save_dict['actions'] = torch.stack(new_actions)
-        if action_classes is not None:
-            save_dict['action_classes'] = action_classes
-
-        torch.save(save_dict, self.output_dataset)
-        print(f"✅ Augmentation complete: {len(images)} → {len(new_images)} samples")
+        return torch.utils.data.TensorDataset(
+            torch.stack(new_images),
+            torch.stack(new_actions),
+            torch.stack(new_angles)
+        )
 
 
 if __name__ == '__main__':

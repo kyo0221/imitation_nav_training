@@ -16,7 +16,7 @@ data_collector:
     cmd_vel_topic: "/cmd_vel"
     image_height: 88
     image_width: 200
-    log_name: "dataset.pt"
+    dataset_folder: "dataset"
     max_data_count: 1000000
     interval_ms: 200
     node_save_distance: 5.0
