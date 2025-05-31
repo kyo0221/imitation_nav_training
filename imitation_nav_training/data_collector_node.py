@@ -25,6 +25,7 @@ class DataCollector(Node):
         self.declare_parameter('image_height', 88)
         self.declare_parameter('log_name', 'dataset')
         self.declare_parameter('max_data_count', 50000)
+        self.declare_parameter('save_node_freq', 5)
 
         self.image_topic = self.get_parameter('image_topic').get_parameter_value().string_value
         self.cmd_vel_topic = self.get_parameter('cmd_vel_topic').get_parameter_value().string_value
@@ -32,6 +33,7 @@ class DataCollector(Node):
         self.img_height = self.get_parameter('image_height').get_parameter_value().integer_value
         self.log_name = self.get_parameter('log_name').get_parameter_value().string_value
         self.max_data_count = self.get_parameter('max_data_count').get_parameter_value().integer_value
+        self.save_node_freq = self.get_parameter('save_node_freq').get_parameter_value().integer_value
 
         self.save_log_path = os.path.join(pkg_dir, '..', 'logs')
         self.dataset_dir = os.path.join(self.save_log_path, self.log_name)
@@ -65,6 +67,8 @@ class DataCollector(Node):
         self.save_flag_sub = self.create_subscription(Bool, '/save', self.save_callback, 10)
 
         self.get_logger().info(f"Saving dataset to: {self.dataset_dir}")
+        self.create_timer(self.save_node_freq, self.save_topomap_periodic)
+
 
     def cmd_callback(self, msg):
         self.last_ang_vel = msg.angular.z
@@ -110,7 +114,10 @@ class DataCollector(Node):
             self.get_logger().error(f"[image_callback] Failed to save data: {e}")
 
     def save_image_callback(self, msg: Empty):
-        if self.data_count == 0:
+        self.save_topomap_image()
+
+    def save_topomap_image(self):
+        if self.data_count == -1:
             self.get_logger().warn("No image available yet for topomap.")
             return
 
@@ -128,7 +135,11 @@ class DataCollector(Node):
             self.image_save_counter += 1
             self.get_logger().info(f"🗺️ Topomap image saved: {dst_name}")
         except Exception as e:
-            self.get_logger().error(f"[save_image_callback] Failed to save topomap image: {e}")
+            self.get_logger().error(f"[save_topomap_image] Failed to save topomap image: {e}")
+
+    def save_topomap_periodic(self):
+        if self.save_flag and self.data_count > 0:
+            self.save_topomap_image()
 
     def destroy_node(self):
         self.map_creator.save_map()

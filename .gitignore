@@ -3,4 +3,5 @@ logs/topo_map/
 logs/dataset/
 logs/visualize/
 logs/*.pt
+config/*.yaml
 .vscode/

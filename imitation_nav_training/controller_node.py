@@ -4,6 +4,8 @@ from sensor_msgs.msg import Joy
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Empty, Bool, String
 
+from time import time
+
 class Buttons:
     Circle = 1
     Triangle = 2
@@ -37,6 +39,9 @@ class ControllerNode(Node):
         self.prev_left_pressed = False
         self.prev_right_pressed = False
 
+        self.last_pressed_time = {}
+        self.debounce_interval = 0.5
+
         qos = 10
         self.publisher_vel = self.create_publisher(Twist, 'cmd_vel', qos)
         self.publisher_stop = self.create_publisher(Empty, 'stop', qos)
@@ -55,7 +60,12 @@ class ControllerNode(Node):
         axes = msg.axes
 
         def is_pressed(idx):
-            return buttons[idx] == 1 and self.prev_buttons[idx] == 0
+            now = time()
+            last_time = self.last_pressed_time.get(idx, 0.0)
+            if buttons[idx] == 1 and self.prev_buttons[idx] == 0 and (now - last_time) > self.debounce_interval:
+                self.last_pressed_time[idx] = now
+                return True
+            return False
 
         if is_pressed(Buttons.Options) or is_pressed(Buttons.Circle):
             self.is_save = not self.is_save
