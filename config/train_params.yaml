@@ -1,33 +1,29 @@
 train:
   batch_size: 8          # バッチサイズ（1ステップあたりのサンプル数）
-  epochs: 60               # エポック数（全データを何周するか）
+  epochs: 50               # エポック数（全データを何周するか）
   learning_rate: 0.0002   # 学習率（Adam最適化器に渡す）
   shuffle: true           # データローダのシャッフル設定（true 推奨）
   resample: true          # 各行動毎のリサンプリング. trueにすると各行動におけるデータ数が均一になるようにリサンプリングします.
   image_height: 88
   image_width: 200
   action_classes: ["straight, left, right"] # 条件付き模倣学習の制御指令
-  model_filename: model_aug_2-3.pt # 出力する学習済みモデルの名前
-  augment: augmix # [None, gamma, augmix]
+  model_filename: model_.test_aug.pt # 出力する学習済みモデルの名前
+  augment: gamma # [None, gamma, augmix]
 
 #------以下, データ拡張用のパラメータ-----#
 
 gamma:
-  input_dataset: hoge.pt                # 拡張対象の元データ名(augment単体実行で使用)
-  output_dataset: dataset_gamma.pt      # 拡張後のデータ名
-  gamma_range: [0.85, 1.15]               # ランダムガンマ補正の範囲（暗〜明）
+  gamma_range: [0.9, 1.1]               # ランダムガンマ補正の範囲（暗〜明）
   num_augmented_samples: 5              # 1枚の画像から生成する補正画像の数
   visualize_image: true                 # 拡張済み画像データの可視化
 
 augmix:
-  input_dataset: hoge.pt
-  output_dataset: dataset_augmix.pt
   num_augmented_samples: 5              # 1枚の画像から生成する補正画像の数
   severity: 1                           # 増強の強度を指定する. 値が大きいほど増強の効果が強くなる.
   width: 2                              # 増強チェーンの幅を指定する. 値が大きいほど様々な増強操作が同時に適用される.
-  depth: 2                             # 増強チェーンの深さを指定する. 値が大きいほど様々な増強操作が連続で適用される.
+  depth: -1                             # 増強チェーンの深さを指定する. 値が大きいほど様々な増強操作が連続で適用される(-1 is random).
   alpha: 1.0                            # 操作を混合する際の重みに使用する. 値が小さい場合, 操作が混合されにくくなる.
-  operations: ["autocontrast" ,"equalize", "sharpness", "color", "contrast", "brightness"]
+  operations: ["autocontrast" , "sharpness", "contrast", "brightness"]
   visualize_image: true
 
 # augmix operation parameters:

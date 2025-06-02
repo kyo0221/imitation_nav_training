@@ -1,79 +1,56 @@
 import os
-import yaml
+
+from torch.utils.data import Dataset
+import numpy as np
 import torch
 import random
-import numpy as np
 import cv2
-from tqdm import tqdm
-from ament_index_python.packages import get_package_share_directory
 
-class GammaAugmentor:
-    def __init__(self, config_path='config/train_params.yaml', input_dataset=None):
-        self.package_dir = os.path.dirname(os.path.realpath(__file__))
-        self.logs_dir = os.path.abspath(os.path.join(self.package_dir, '..', '..', 'logs'))
-        self.config_path = os.path.abspath(os.path.join(self.package_dir, '..', '..', config_path))
-        self.visualize_dir = os.path.join(self.logs_dir, 'visualize')
 
-        self._load_config()
+class GammaWrapperDataset(Dataset):
+    def __init__(self, base_dataset, gamma_range=(0.9, 1.1), num_augmented_samples=1,
+                 visualize=False, visualize_dir=None):
+        self.base_dataset = base_dataset
+        self.gamma_range = gamma_range
+        self.num_augmented_samples = num_augmented_samples
 
-        if input_dataset is not None:
-            self.input_dataset = input_dataset
+        self.visualize = visualize
+        self.visualize_dir = visualize_dir
+        self.visualize_limit = 100
+        self.visualized_count = 0
+        self.total_augmented = len(base_dataset) * num_augmented_samples
+        self.visualize_prob = min(1.0, self.visualize_limit / self.total_augmented)
 
-        if self.visualize_flag:
+        if self.visualize and self.visualize_dir:
             os.makedirs(self.visualize_dir, exist_ok=True)
 
-    def _load_config(self):
-        with open(self.config_path, 'r') as f:
-            params = yaml.safe_load(f)['gamma']
+        self.original_length = len(base_dataset)
 
-        self.gamma_range = params['gamma_range']
-        self.num_augmented_samples = params['num_augmented_samples']
-        self.visualize_flag = params.get('visualize_image', False)
+    def __len__(self):
+        return self.original_length * (1 + self.num_augmented_samples)
 
-    def _apply_gamma_correction(self, image: np.ndarray, gamma: float) -> np.ndarray:
-        inv_gamma = 1.0 / gamma
-        table = np.array([
-            ((i / 255.0) ** inv_gamma) * 255
-            for i in range(256)
-        ]).astype("uint8")
-        return cv2.LUT(image, table)
+    def __getitem__(self, index):
+        base_idx = index // (1 + self.num_augmented_samples)
+        is_aug = index % (1 + self.num_augmented_samples) != 0
 
-    def augment(self):
-        print(f"📦 Running GammaAugmentor on {len(self.input_dataset)} samples")
+        image, action_onehot, angle = self.base_dataset[base_idx]
 
-        new_images = []
-        new_actions = []
-        new_angles = []
-
-        for idx in tqdm(range(len(self.input_dataset)), desc="GammaAugmenting"):
-            image, action_onehot, angle = self.input_dataset[idx]
-
-            new_images.append(image)
-            new_actions.append(action_onehot)
-            new_angles.append(angle)
-
+        if is_aug:
             img_np = (image.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+            gamma = random.uniform(*self.gamma_range)
+            inv_gamma = 1.0 / gamma
+            table = np.array([(i / 255.0) ** inv_gamma * 255 for i in range(256)]).astype("uint8")
+            gamma_img = cv2.LUT(img_np, table)
 
-            for i in range(self.num_augmented_samples):
-                gamma = random.uniform(*self.gamma_range)
-                gamma_img = self._apply_gamma_correction(img_np, gamma)
-                gamma_tensor = torch.tensor(gamma_img, dtype=torch.float32).permute(2, 0, 1) / 255.0
-
-                new_images.append(gamma_tensor)
-                new_actions.append(action_onehot.clone())
-                new_angles.append(angle.clone())
-
-                if self.visualize_flag:
-                    save_path = os.path.join(self.visualize_dir, f"{idx:05d}_aug{i}_gamma{gamma:.2f}.png")
+            if self.visualize and self.visualized_count < self.visualize_limit:
+                if random.random() < self.visualize_prob:
+                    save_path = os.path.join(
+                        self.visualize_dir, f"{base_idx:05d}_aug{index}_gamma{gamma:.2f}.png"
+                    )
                     cv2.imwrite(save_path, gamma_img)
+                    self.visualized_count += 1
 
-        print(f"✅ Gamma augmentation complete: {len(new_images)} total samples")
-        return torch.utils.data.TensorDataset(
-            torch.stack(new_images),
-            torch.stack(new_actions),
-            torch.stack(new_angles)
-        )
+            with torch.no_grad():
+                image = torch.tensor(gamma_img, dtype=torch.float32).permute(2, 0, 1) / 255.0
 
-
-if __name__ == '__main__':
-    print("🔧 Please use this module by importing GammaAugmentor(input_dataset=...) from training script.")
+        return image, action_onehot, angle

@@ -1,7 +1,3 @@
-logs/result/
-logs/topo_map/
-logs/dataset/
-logs/visualize/
-logs/*.pt
+logs/
 config/*.yaml
 .vscode/

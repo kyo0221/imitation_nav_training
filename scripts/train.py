@@ -8,8 +8,8 @@ import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 from ament_index_python.packages import get_package_share_directory
 
-from augment.gamma_augment import GammaAugmentor
-from augment.augmix_augment import AugMixAugmentor
+from augment.gamma_augment import GammaWrapperDataset
+from augment.augmix_augment import AugMixWrapperDataset
 from augment.imitation_dataset import ImitationDataset
 
 
@@ -33,6 +33,32 @@ class Config:
         self.model_filename = config['model_filename']
         self.class_names = [name.strip() for name in config['action_classes'][0].split(',')]
         self.augment_method = config['augment']
+
+class AugMixConfig:
+    def __init__(self):
+        package_dir = get_package_share_directory('imitation_nav_training')
+        config_path = os.path.join(package_dir, 'config', 'train_params.yaml')
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)['augmix']
+
+        self.num_augmented_samples = config['num_augmented_samples']
+        self.severity = config['severity']
+        self.width = config['width']
+        self.depth = config['depth']
+        self.alpha = config['alpha']
+        self.operations = config['operations']
+        self.visualize_image = config['visualize_image']
+
+class GammaConfig:
+    def __init__(self):
+        package_dir = get_package_share_directory('imitation_nav_training')
+        config_path = os.path.join(package_dir, 'config', 'train_params.yaml')
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)['gamma']
+
+        self.num_augmented_samples = config['num_augmented_samples']
+        self.gamma_range = config['gamma_range']
+        self.visualize_image = config['visualize_image']
 
 
 class ConditionalAnglePredictor(nn.Module):
@@ -161,11 +187,27 @@ if __name__ == '__main__':
     )
 
     if config.augment_method == "gamma":
-        augmentor = GammaAugmentor(input_dataset=dataset)
-        dataset = augmentor.augment()
+        gamma_config = GammaConfig()  # 共通で使うならこのクラス名でもOK
+        dataset = GammaWrapperDataset(
+            base_dataset=dataset,
+            gamma_range=gamma_config.gamma_range,
+            num_augmented_samples=gamma_config.num_augmented_samples,
+            visualize=gamma_config.visualize_image,
+            visualize_dir=os.path.join(config.result_dir, "gamma")
+        )
     elif config.augment_method == "augmix":
-        augmentor = AugMixAugmentor(input_dataset=dataset)
-        dataset = augmentor.augment()
+        augmix_config = AugMixConfig()
+        dataset = AugMixWrapperDataset(
+            base_dataset=dataset,
+            num_augmented_samples=augmix_config.num_augmented_samples,
+            severity=augmix_config.severity,
+            width=augmix_config.width,
+            depth=augmix_config.depth,
+            allowed_ops=augmix_config.operations,
+            alpha=augmix_config.alpha,
+            visualize=augmix_config.visualize_image,
+            visualize_dir=os.path.join(config.result_dir, "augmix")
+        )
     elif config.augment_method in ["none", "None"]:
         pass
     else:
