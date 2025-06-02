@@ -130,7 +130,8 @@ class DataCollector(Node):
             img = cv2.imread(src_path)
             if img is None:
                 raise ValueError("Failed to load image for topomap")
-            cv2.imwrite(dst_path, img)
+            resized_img = cv2.resize(img, (88, 88))
+            cv2.imwrite(dst_path, resized_img)
             self.map_creator.add_node(dst_name, self.command_mode)
             self.image_save_counter += 1
             self.get_logger().info(f"🗺️ Topomap image saved: {dst_name}")
