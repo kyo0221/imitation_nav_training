@@ -4,6 +4,7 @@ import yaml
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.cuda.amp import GradScaler, autocast
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 from ament_index_python.packages import get_package_share_directory
@@ -113,7 +114,7 @@ class ConditionalAnglePredictor(nn.Module):
         batch_size = image.size(0)
         action_indices = torch.argmax(action_onehot, dim=1)
 
-        output = torch.zeros(batch_size, self.branches[0][-1].out_features, device=image.device)
+        output = torch.zeros(batch_size, self.branches[0][-1].out_features, device=image.device, dtype=fc_out.dtype)
         for idx, branch in enumerate(self.branches):
             selected_idx = (action_indices == idx).nonzero().squeeze(1)
             if selected_idx.numel() > 0:
@@ -127,7 +128,7 @@ class Training:
         self.config = config
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.loader = DataLoader(dataset, batch_size=config.batch_size, shuffle=config.shuffle)
+        self.loader = DataLoader(dataset, batch_size=config.batch_size, num_workers=os.cpu_count() // 20, pin_memory=True, shuffle=config.shuffle)
         self.model = ConditionalAnglePredictor(3, 1, config.image_height, config.image_width, len(config.class_names)).to(self.device)
         self.criterion = nn.MSELoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=config.learning_rate)
@@ -137,15 +138,22 @@ class Training:
         total_batches = len(self.loader) * self.config.epochs
         current_batch = 0
 
+        scaler = torch.cuda.amp.GradScaler()
+        torch.backends.cudnn.benchmark = True
+
         for epoch in range(self.config.epochs):
             for batch in self.loader:
                 images, action_onehots, targets = [x.to(self.device) for x in batch]
-                preds = self.model(images, action_onehots)
-                loss = self.criterion(preds, targets)
 
                 self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
+
+                with torch.cuda.amp.autocast():
+                    preds = self.model(images, action_onehots)
+                    loss = self.criterion(preds, targets)
+
+                scaler.scale(loss).backward()
+                scaler.step(self.optimizer)
+                scaler.update()
 
                 self.loss_log.append(loss.item())
                 current_batch += 1
