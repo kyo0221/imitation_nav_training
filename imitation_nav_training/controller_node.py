@@ -17,6 +17,7 @@ class Buttons:
     Share = 8
     Options = 9
     PS = 10
+    L_PRESS = 11
 
 class Axes:
     L_Y = 1
@@ -34,6 +35,7 @@ class ControllerNode(Node):
         self.angular_max_vel = self.get_parameter('angular_max_vel').value
         self.is_autonomous = self.get_parameter('autonomous_flag').value
         self.is_save = False
+        self.is_autorun = False
 
         self.prev_buttons = [0] * 13
         self.prev_left_pressed = False
@@ -103,9 +105,16 @@ class ControllerNode(Node):
             self.publisher_save_image.publish(Empty())
         self.prev_right_pressed = right_pressed
 
+        if is_pressed(Buttons.L_PRESS):
+            self.is_autorun = not self.is_autorun
+            self.get_logger().info(f'オートラン: {self.is_autorun}')
+
         if not self.is_autonomous:
             twist = Twist()
-            twist.linear.x = self.linear_max_vel * axes[Axes.L_Y]
+            if self.is_autorun:
+                twist.linear.x = self.linear_max_vel
+            else:
+                twist.linear.x = self.linear_max_vel * axes[Axes.L_Y]
             twist.angular.z = self.angular_max_vel * axes[Axes.R_X]
             self.publisher_vel.publish(twist)
 
