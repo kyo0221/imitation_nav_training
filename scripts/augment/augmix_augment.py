@@ -7,6 +7,8 @@ import cv2
 from tqdm import tqdm
 from ament_index_python.packages import get_package_share_directory
 
+from torch.utils.data import Dataset
+
 
 # AugMix component operations
 class augmentations:
@@ -119,67 +121,68 @@ class augmentations:
         mixed = np.clip(mix, 0, 255).astype(np.uint8)
         return mixed
 
+    
+class AugMixWrapperDataset(Dataset):
+    def __init__(self, base_dataset, num_augmented_samples=1, severity=3, width=3, depth=-1,
+                 allowed_ops=None, alpha=1.0, visualize=False, visualize_dir=None):
+        self.base_dataset = base_dataset
+        self.num_augmented_samples = num_augmented_samples
+        self.severity = severity
+        self.width = width
+        self.depth = depth
+        self.allowed_ops = allowed_ops or ['rotate', 'contrast', 'brightness', 'sharpness']
+        self.alpha = alpha
 
-class AugMixAugmentor:
-    def __init__(self, config_path='config/augment_params.yaml', input_dataset_path=None):
-        self.package_dir = os.path.dirname(os.path.realpath(__file__))
-        self.logs_dir = os.path.abspath(os.path.join(self.package_dir, '..', '..', 'logs'))
-        self.config_path = os.path.abspath(os.path.join(self.package_dir, '..', '..', config_path))
-        self.visualize_dir = os.path.join(self.logs_dir, 'visualize')
+        self.visualize = visualize
+        self.visualize_dir = visualize_dir
+        self.visualized_count = 0
+        self.visualize_limit = 100
+        self.total_augmented = len(base_dataset) * num_augmented_samples
+        self.visualize_prob = min(1.0, self.visualize_limit / self.total_augmented)
 
-        self._load_config()
-
-        if input_dataset_path is not None:
-            self.input_dataset = input_dataset_path
-
-        if self.visualize_flag:
+        if self.visualize and self.visualize_dir:
             os.makedirs(self.visualize_dir, exist_ok=True)
 
-    def _load_config(self):
-        with open(self.config_path, 'r') as f:
-            params = yaml.safe_load(f)['augmix']
+        self.original_length = len(self.base_dataset)
 
-        self.input_dataset = os.path.join(self.logs_dir, params['input_dataset'])
-        self.output_dataset = os.path.join(self.logs_dir, params['output_dataset'])
-        self.num_augmented_samples = params['num_augmented_samples']
-        self.severity = params.get('severity', 3)
-        self.width = params.get('width', 3)
-        self.depth = params.get('depth', -1)
-        self.allowed_ops = params.get('operations', ['rotate', 'contrast', 'brightness', 'sharpness', 'blur'])
-        self.visualize_flag = params.get('visualize_image', False)
-        self.alpha = params.get('alpha', 1.0)
+    def __len__(self):
+        return self.original_length * (1 + self.num_augmented_samples)
 
-    def augment(self):
-        print(f"\U0001F4E6 Loading dataset from {self.input_dataset}")
-        data = torch.load(self.input_dataset)
-        images = data['images']
-        angles = data['angles']
+    def __getitem__(self, index):
+        base_idx = index // (1 + self.num_augmented_samples)
+        is_aug = index % (1 + self.num_augmented_samples) != 0
 
-        new_images = []
-        new_angles = []
+        image, action_onehot, angle = self.base_dataset[base_idx]
 
-        for idx, (img_tensor, angle) in enumerate(tqdm(zip(images, angles), total=len(images), desc="AugMixing")):
-            new_images.append(img_tensor)
-            new_angles.append(angle)
+        if is_aug:
+            img_np = (image.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+            aug_img = self._apply_augmix(img_np)
 
-            img_np = (img_tensor.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+            if self.visualize and self.visualized_count < self.visualize_limit:
+                if random.random() < self.visualize_prob:
+                    save_path = os.path.join(self.visualize_dir, f"{base_idx:05d}_aug{index}.png")
+                    cv2.imwrite(save_path, aug_img[:, :, ::-1])  # RGB → BGR
+                    self.visualized_count += 1
 
-            for i in range(self.num_augmented_samples):
-                aug_img = augmentations.augmix(img_np, self.severity, self.width, self.depth, self.allowed_ops, self.alpha)
-                aug_tensor = torch.tensor(aug_img, dtype=torch.float32).permute(2, 0, 1) / 255.0
+            with torch.no_grad():
+                image = torch.tensor(aug_img, dtype=torch.float32).permute(2, 0, 1) / 255.0
 
-                new_images.append(aug_tensor)
-                new_angles.append(angle.clone())
+        return image, action_onehot, angle
 
-                if self.visualize_flag:
-                    save_path = os.path.join(self.visualize_dir, f"{idx:05d}_aug{i}_augmix.png")
-                    cv2.imwrite(save_path, aug_img)
+    def _apply_augmix(self, image: np.ndarray) -> np.ndarray:
+        ws = np.float32(np.random.dirichlet([self.alpha] * self.width))
+        mix = np.zeros_like(image, dtype=np.float32)
 
-        print(f"\U0001F4CE Saving augmented dataset to {self.output_dataset}")
-        torch.save({'images': torch.stack(new_images), 'angles': torch.stack(new_angles)}, self.output_dataset)
-        print(f"✅ Augmentation complete: {len(images)} → {len(new_images)} samples")
+        for i in range(self.width):
+            img_aug = image.copy().astype(np.float32)
+            d = self.depth if self.depth > 0 else np.random.randint(1, 4)
+            ops = random.choices(self.allowed_ops, k=d)
+            for op in ops:
+                img_aug = self._apply_op(img_aug, op, self.severity)
+            mix += ws[i] * img_aug
 
+        mixed = np.clip(mix, 0, 255).astype(np.uint8)
+        return mixed
 
-if __name__ == '__main__':
-    augmentor = AugMixAugmentor()
-    augmentor.augment()
+    def _apply_op(self, img, op_name, severity):
+        return augmentations.apply_op(img, op_name, severity)

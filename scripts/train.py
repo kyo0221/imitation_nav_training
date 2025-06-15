@@ -4,11 +4,17 @@ import yaml
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.cuda.amp import GradScaler, autocast
 import matplotlib.pyplot as plt
-from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.data import DataLoader
 from ament_index_python.packages import get_package_share_directory
-from augment.gamma_augment import GammaAugmentor
-from augment.augmix_augment import AugMixAugmentor
+from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
+
+from augment.gamma_augment import GammaWrapperDataset
+from augment.augmix_augment import AugMixWrapperDataset
+from augment.albumentations_augment import AlbumentationsWrapperDataset
+from augment.imitation_dataset import ImitationDataset
 
 
 class Config:
@@ -29,126 +35,252 @@ class Config:
         self.image_height = config['image_height']
         self.image_width = config['image_width']
         self.model_filename = config['model_filename']
+        self.class_names = [name.strip() for name in config['action_classes'][0].split(',')]
         self.augment_method = config['augment']
 
+class AugMixConfig:
+    def __init__(self):
+        package_dir = get_package_share_directory('imitation_nav_training')
+        config_path = os.path.join(package_dir, 'config', 'train_params.yaml')
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)['augmix']
 
-class AnglePredictor(nn.Module):
-    def __init__(self, n_channel, n_out, input_height, input_width):
+        self.num_augmented_samples = config['num_augmented_samples']
+        self.severity = config['severity']
+        self.width = config['width']
+        self.depth = config['depth']
+        self.alpha = config['alpha']
+        self.operations = config['operations']
+        self.visualize_image = config['visualize_image']
+
+class GammaConfig:
+    def __init__(self):
+        package_dir = get_package_share_directory('imitation_nav_training')
+        config_path = os.path.join(package_dir, 'config', 'train_params.yaml')
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)['gamma']
+
+        self.num_augmented_samples = config['num_augmented_samples']
+        self.gamma_range = config['gamma_range']
+        self.visualize_image = config['visualize_image']
+
+class AlbumentationsConfig:
+    def __init__(self):
+        package_dir = get_package_share_directory('imitation_nav_training')
+        config_path = os.path.join(package_dir, 'config', 'train_params.yaml')
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)['albumentations']
+
+        self.num_augmented_samples = config['num_augmented_samples']
+        self.brightness_limit = config['brightness_limit']
+        self.contrast_limit = config['contrast_limit']
+        self.saturation_limit = config['saturation_limit']
+        self.hue_limit = config['hue_limit']
+        self.blur_limit = config['blur_limit']
+        self.h_flip_prob = config['h_flip_prob']
+        self.visualize_image = config['visualize_image']
+
+
+class ConditionalAnglePredictor(nn.Module):
+    def __init__(self, n_channel, n_out, input_height, input_width, n_action_classes):
         super().__init__()
-        self.conv1 = nn.Conv2d(n_channel, 32, kernel_size=8, stride=4)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2)
-        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
         self.relu = nn.ReLU(inplace=True)
         self.flatten = nn.Flatten()
+        self.dropout_conv = nn.Dropout2d(p=0.2)
+        self.dropout_fc = nn.Dropout(p=0.5)
+
+        def conv_block(in_channels, out_channels, kernel_size, stride, apply_bn=True):
+            layers = [
+                nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=kernel_size//2),
+                nn.BatchNorm2d(out_channels) if apply_bn else nn.Identity(),
+                self.relu,
+                self.dropout_conv
+            ]
+            return nn.Sequential(*layers)
+
+        self.conv1 = conv_block(n_channel, 32, kernel_size=5, stride=2)
+        self.conv2 = conv_block(32, 48, kernel_size=3, stride=1)
+        self.conv3 = conv_block(48, 64, kernel_size=3, stride=2)
+        self.conv4 = conv_block(64, 96, kernel_size=3, stride=1)
+        self.conv5 = conv_block(96, 128, kernel_size=3, stride=2)
+        self.conv6 = conv_block(128, 160, kernel_size=3, stride=1)
+        self.conv7 = conv_block(160, 192, kernel_size=3, stride=1)
+        self.conv8 = conv_block(192, 256, kernel_size=3, stride=1)
 
         with torch.no_grad():
             dummy_input = torch.zeros(1, n_channel, input_height, input_width)
             x = self.conv1(dummy_input)
-            x = self.relu(x)
             x = self.conv2(x)
-            x = self.relu(x)
             x = self.conv3(x)
-            x = self.relu(x)
+            x = self.conv4(x)
+            x = self.conv5(x)
+            x = self.conv6(x)
+            x = self.conv7(x)
+            x = self.conv8(x)
             x = self.flatten(x)
             flattened_size = x.shape[1]
 
-        self.fc4 = nn.Linear(flattened_size, 512)
-        self.fc5 = nn.Linear(512, n_out)
+        self.fc1 = nn.Linear(flattened_size, 512)
+        self.fc2 = nn.Linear(512, 512)
 
-        torch.nn.init.kaiming_normal_(self.conv1.weight)
-        torch.nn.init.kaiming_normal_(self.conv2.weight)
-        torch.nn.init.kaiming_normal_(self.conv3.weight)
-        torch.nn.init.kaiming_normal_(self.fc4.weight)
+        self.branches = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(512, 256),
+                self.relu,
+                nn.Linear(256, n_out)
+            ) for _ in range(n_action_classes)
+        ])
 
         self.cnn_layer = nn.Sequential(
-            self.conv1, self.relu,
-            self.conv2, self.relu,
-            self.conv3, self.relu,
+            self.conv1,
+            self.conv2,
+            self.conv3,
+            self.conv4,
+            self.conv5,
+            self.conv6,
+            self.conv7,
+            self.conv8,
             self.flatten
         )
-        self.fc_layer = nn.Sequential(
-            self.fc4, self.relu, self.fc5
-        )
 
-    def forward(self, x):
-        x = self.cnn_layer(x)
-        x = self.fc_layer(x)
-        return x
+    def forward(self, image, action_onehot):
+        features = self.cnn_layer(image)
+        x = self.relu(self.fc1(features))
+        x = self.dropout_fc(x)
+        fc_out = self.relu(self.fc2(x))
 
+        batch_size = image.size(0)
+        action_indices = torch.argmax(action_onehot, dim=1)
+
+        output = torch.zeros(batch_size, self.branches[0][-1].out_features, device=image.device, dtype=fc_out.dtype)
+        for idx, branch in enumerate(self.branches):
+            selected_idx = (action_indices == idx).nonzero().squeeze(1)
+            if selected_idx.numel() > 0:
+                output[selected_idx] = branch(fc_out[selected_idx])
+
+        return output
 
 class Training:
-    def __init__(self, config, dataset_path):
+    def __init__(self, config, dataset):
         self.config = config
-        self.dataset_path = dataset_path
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        data = torch.load(self.dataset_path)
-        images, angles = data['images'], data['angles']
-        dataset = TensorDataset(images, angles)
-        self.loader = DataLoader(dataset, batch_size=config.batch_size, shuffle=config.shuffle)
-
-        self.model = AnglePredictor(3, 1, config.image_height, config.image_width).to(self.device)
+        self.loader = DataLoader(dataset, batch_size=config.batch_size, num_workers=os.cpu_count() // 20, pin_memory=True, shuffle=config.shuffle)
+        self.model = ConditionalAnglePredictor(3, 1, config.image_height, config.image_width, len(config.class_names)).to(self.device)
         self.criterion = nn.MSELoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=config.learning_rate)
+        self.writer = SummaryWriter(log_dir=config.result_dir)
         self.loss_log = []
 
     def train(self):
-        total_batches = len(self.loader) * self.config.epochs
-        current_batch = 0
+        scaler = torch.cuda.amp.GradScaler()
+        torch.backends.cudnn.benchmark = True
 
         for epoch in range(self.config.epochs):
-            for batch in self.loader:
-                inputs, targets = [x.to(self.device) for x in batch]
-                preds = self.model(inputs)
-                loss = self.criterion(preds, targets)
+            epoch_loss = 0.0
+            batch_iter = tqdm(self.loader, desc=f"Epoch {epoch+1}/{self.config.epochs}", leave=False)
+            for i, batch in enumerate(batch_iter):
+                images, action_onehots, targets = [x.to(self.device) for x in batch]
 
                 self.optimizer.zero_grad()
-                loss.backward()
-                self.optimizer.step()
+
+                with torch.cuda.amp.autocast():
+                    preds = self.model(images, action_onehots)
+                    loss = self.criterion(preds, targets)
+
+                scaler.scale(loss).backward()
+                scaler.step(self.optimizer)
+                scaler.update()
 
                 self.loss_log.append(loss.item())
-                current_batch += 1
-                progress = (current_batch / total_batches) * 100
-                print(f"Epoch {epoch+1}/{self.config.epochs}, Loss: {loss.item():.4f}, Progress: {progress:.1f}%")
+                epoch_loss += loss.item()
+                batch_iter.set_postfix(loss=loss.item())
+
+            avg_loss = epoch_loss / len(self.loader)
+            self.writer.add_scalar('Loss/epoch_avg', avg_loss, epoch)
+            self.writer.flush()
 
         self.save_results()
+        self.writer.close()
 
     def save_results(self):
-        example_input = torch.randn(1, 3, self.config.image_height, self.config.image_width).to(self.device)
-        scripted_model = torch.jit.trace(self.model, example_input)
+        scripted_model = torch.jit.script(self.model)
         scripted_path = os.path.join(self.config.result_dir, self.config.model_filename)
         scripted_model.save(scripted_path)
-        print(f"🧠 学習済みモデルを保存しました: {scripted_path}")
+        print(f"🐜 学習済みモデルを保存しました: {scripted_path}")
 
         plt.figure()
         plt.plot(self.loss_log)
         plt.title("Training Loss")
         plt.xlabel("Iteration")
         plt.ylabel("Loss")
-        loss_plot_path = os.path.join(self.config.result_dir, 'loss_curve.png')
-        plt.savefig(loss_plot_path)
-        print(f"📈 损失推移グラフを保存しました: {loss_plot_path}")
+        plt.savefig(os.path.join(self.config.result_dir, 'loss_curve.png'))
+        print("📈 学習曲線を保存しました")
 
 
 if __name__ == '__main__':
+    import warnings
+    warnings.filterwarnings("ignore", category=UserWarning)
     parser = argparse.ArgumentParser()
-    parser.add_argument('dataset', type=str, help='Path to dataset .pt file')
+    parser.add_argument('dataset', type=str, help='Path to dataset directory (contains images/, angle/, action/)')
+    parser.add_argument('visualize_dir', nargs='?', default=None, help='Optional directory to save visualized samples')
     args = parser.parse_args()
+
     config = Config()
+    dataset_dir = args.dataset
 
+    base_dataset = ImitationDataset(
+        dataset_dir=dataset_dir,
+        input_size=(config.image_height, config.image_width),
+        shift_offset=5,
+        vel_offset=0.2,
+        n_action_classes=len(config.class_names),
+        visualize_dir=args.visualize_dir
+    )
 
-    if config.augment_method == "none" or config.augment_method == "None":
-        dataset_path = args.dataset
-    elif config.augment_method == "gamma":
-        augmentor = GammaAugmentor(input_dataset_path=args.dataset)
-        augmentor.augment()
-        dataset_path = augmentor.output_dataset
+    if config.augment_method == "gamma":
+        gamma_config = GammaConfig()
+        dataset = GammaWrapperDataset(
+            base_dataset=base_dataset,
+            gamma_range=gamma_config.gamma_range,
+            num_augmented_samples=gamma_config.num_augmented_samples,
+            visualize=gamma_config.visualize_image,
+            visualize_dir=os.path.join(config.result_dir, "gamma")
+        )
     elif config.augment_method == "augmix":
-        augmentor = AugMixAugmentor(input_dataset_path=args.dataset)
-        augmentor.augment()
-        dataset_path = augmentor.output_dataset
+        augmix_config = AugMixConfig()
+        dataset = AugMixWrapperDataset(
+            base_dataset=base_dataset,
+            num_augmented_samples=augmix_config.num_augmented_samples,
+            severity=augmix_config.severity,
+            width=augmix_config.width,
+            depth=augmix_config.depth,
+            allowed_ops=augmix_config.operations,
+            alpha=augmix_config.alpha,
+            visualize=augmix_config.visualize_image,
+            visualize_dir=os.path.join(config.result_dir, "augmix")
+        )
+    elif config.augment_method == "albumentations":
+        albumentations_config = AlbumentationsConfig()
+        dataset = AlbumentationsWrapperDataset(
+            base_dataset=base_dataset,
+            num_augmented_samples=albumentations_config.num_augmented_samples,
+            brightness_limit=albumentations_config.brightness_limit,
+            contrast_limit=albumentations_config.contrast_limit,
+            saturation_limit=albumentations_config.saturation_limit,
+            hue_limit=albumentations_config.hue_limit,
+            blur_limit=albumentations_config.blur_limit,
+            h_flip_prob=albumentations_config.h_flip_prob,
+            visualize=albumentations_config.visualize_image,
+            visualize_dir=os.path.join(config.result_dir, "albumentations")
+        )
+    elif config.augment_method in ["none", "None"]:
+        dataset = base_dataset
     else:
         raise ValueError(f"Unknown augmentation method: {config.augment_method}")
 
-    trainer = Training(config, dataset_path)
+    print(f"Base dataset size (after rotate_aug): {len(base_dataset)} samples")
+    print(f"Final dataset size after {config.augment_method} augmentation: {len(dataset)} samples")
+
+    trainer = Training(config, dataset)
     trainer.train()

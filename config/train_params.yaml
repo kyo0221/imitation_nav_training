@@ -1,9 +1,40 @@
 train:
   batch_size: 8          # バッチサイズ（1ステップあたりのサンプル数）
-  epochs: 10               # エポック数（全データを何周するか）
-  learning_rate: 0.0001   # 学習率（Adam最適化器に渡す）
+  epochs: 50               # エポック数（全データを何周するか）
+  learning_rate: 0.0002   # 学習率（Adam最適化器に渡す）
   shuffle: true           # データローダのシャッフル設定（true 推奨）
+  resample: true          # 各行動毎のリサンプリング. trueにすると各行動におけるデータ数が均一になるようにリサンプリングします.
   image_height: 88
   image_width: 200
-  model_filename: model.pt # 出力する学習済みモデルの名前
-  augment: augmix # [None, gamma, augmix]
+  action_classes: ["straight, left, right"] # 条件付き模倣学習の制御指令
+  model_filename: model_.test_aug.pt # 出力する学習済みモデルの名前
+  augment: gamma # [None, gamma, augmix]
+
+#------以下, データ拡張用のパラメータ-----#
+
+gamma:
+  gamma_range: [0.9, 1.1]               # ランダムガンマ補正の範囲（暗〜明）
+  num_augmented_samples: 5              # 1枚の画像から生成する補正画像の数
+  visualize_image: true                 # 拡張済み画像データの可視化
+
+augmix:
+  num_augmented_samples: 5              # 1枚の画像から生成する補正画像の数
+  severity: 1                           # 増強の強度を指定する. 値が大きいほど増強の効果が強くなる.
+  width: 2                              # 増強チェーンの幅を指定する. 値が大きいほど様々な増強操作が同時に適用される.
+  depth: -1                             # 増強チェーンの深さを指定する. 値が大きいほど様々な増強操作が連続で適用される(-1 is random).
+  alpha: 1.0                            # 操作を混合する際の重みに使用する. 値が小さい場合, 操作が混合されにくくなる.
+  operations: ["autocontrast" , "sharpness", "contrast", "brightness"]
+  visualize_image: true
+
+# augmix operation parameters:
+#   autocontrast : 画像全体のコントラストを調整し, 明暗の範囲を広げる.
+#   equalize : ヒストグラム均等化により, 画像の明るさ分布を均一化する.
+#   posterize : 画像の色のビット数を減らし, 色数を制限する.
+#   rotate : 画像を指定された角度で回転させる.
+#   solarize : ピクセル値が特定の閾値を超えた部分を反転させる.
+#   shear_x, shear_y : 画像を水平方向または垂直方向に引き伸ばすように変形する.
+#   translate_x, translate_y : 画像を水平方向または垂直方向に平行移動させる.
+#   color : 画像の色味を調整し, 彩度を変化させる.
+#   contrast : 画像のコントラストを変更し, 明暗の差を強調または弱める.
+#   brightness : 画像全体の明るさを調整する.
+#   sharpness : 画像のエッジを強調することで,鮮明さを変更する.
