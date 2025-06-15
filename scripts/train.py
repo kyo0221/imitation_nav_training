@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 from augment.gamma_augment import GammaWrapperDataset
 from augment.augmix_augment import AugMixWrapperDataset
+from augment.albumentations_augment import AlbumentationsWrapperDataset
 from augment.imitation_dataset import ImitationDataset
 
 
@@ -61,6 +62,22 @@ class GammaConfig:
 
         self.num_augmented_samples = config['num_augmented_samples']
         self.gamma_range = config['gamma_range']
+        self.visualize_image = config['visualize_image']
+
+class AlbumentationsConfig:
+    def __init__(self):
+        package_dir = get_package_share_directory('imitation_nav_training')
+        config_path = os.path.join(package_dir, 'config', 'train_params.yaml')
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)['albumentations']
+
+        self.num_augmented_samples = config['num_augmented_samples']
+        self.brightness_limit = config['brightness_limit']
+        self.contrast_limit = config['contrast_limit']
+        self.saturation_limit = config['saturation_limit']
+        self.hue_limit = config['hue_limit']
+        self.blur_limit = config['blur_limit']
+        self.h_flip_prob = config['h_flip_prob']
         self.visualize_image = config['visualize_image']
 
 
@@ -179,10 +196,6 @@ class Training:
                 epoch_loss += loss.item()
                 batch_iter.set_postfix(loss=loss.item())
 
-                # TensorBoard step-wise logging
-                global_step = epoch * len(self.loader) + i
-                self.writer.add_scalar('Loss/step', loss.item(), global_step)
-
             avg_loss = epoch_loss / len(self.loader)
             self.writer.add_scalar('Loss/epoch_avg', avg_loss, epoch)
             self.writer.flush()
@@ -219,8 +232,7 @@ if __name__ == '__main__':
     base_dataset = ImitationDataset(
         dataset_dir=dataset_dir,
         input_size=(config.image_height, config.image_width),
-        rotate_aug=True,
-        angle_offset_deg=5,
+        shift_offset=5,
         vel_offset=0.2,
         n_action_classes=len(config.class_names),
         visualize_dir=args.visualize_dir
@@ -247,6 +259,20 @@ if __name__ == '__main__':
             alpha=augmix_config.alpha,
             visualize=augmix_config.visualize_image,
             visualize_dir=os.path.join(config.result_dir, "augmix")
+        )
+    elif config.augment_method == "albumentations":
+        albumentations_config = AlbumentationsConfig()
+        dataset = AlbumentationsWrapperDataset(
+            base_dataset=base_dataset,
+            num_augmented_samples=albumentations_config.num_augmented_samples,
+            brightness_limit=albumentations_config.brightness_limit,
+            contrast_limit=albumentations_config.contrast_limit,
+            saturation_limit=albumentations_config.saturation_limit,
+            hue_limit=albumentations_config.hue_limit,
+            blur_limit=albumentations_config.blur_limit,
+            h_flip_prob=albumentations_config.h_flip_prob,
+            visualize=albumentations_config.visualize_image,
+            visualize_dir=os.path.join(config.result_dir, "albumentations")
         )
     elif config.augment_method in ["none", "None"]:
         dataset = base_dataset
