@@ -10,8 +10,6 @@ from cv_bridge import CvBridge
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.use('Agg')  # ヘッドレス環境対応
 
 from .topomap_creator_node import TopologicalMapCreator
 from .placenet import PlaceNet
@@ -29,6 +27,7 @@ class DataCollector(Node):
         self.declare_parameter('log_name', 'dataset')
         self.declare_parameter('max_data_count', 50000)
         self.declare_parameter('save_node_freq', 5)
+        self.declare_parameter('show_histogram', True)
 
         self.image_topic = self.get_parameter('image_topic').get_parameter_value().string_value
         self.cmd_vel_topic = self.get_parameter('cmd_vel_topic').get_parameter_value().string_value
@@ -37,6 +36,7 @@ class DataCollector(Node):
         self.log_name = self.get_parameter('log_name').get_parameter_value().string_value
         self.max_data_count = self.get_parameter('max_data_count').get_parameter_value().integer_value
         self.save_node_freq = self.get_parameter('save_node_freq').get_parameter_value().integer_value
+        self.show_histogram = self.get_parameter('show_histogram').get_parameter_value().bool_value
 
         self.save_log_path = os.path.join(pkg_dir, '..', 'logs')
         self.dataset_dir = os.path.join(self.save_log_path, self.log_name)
@@ -64,8 +64,12 @@ class DataCollector(Node):
         self.data_count = 0
         self.action_counts = {"straight": 0, "left": 0, "right": 0}
         
-        # ヒストグラム表示（初期表示）
-        self.display_histogram()
+        # ヒストグラム表示用の図を初期化（パラメータで有効な場合のみ）
+        self.fig = None
+        self.ax = None
+        if self.show_histogram:
+            plt.ion()  # インタラクティブモードON
+            self.fig, self.ax = plt.subplots(figsize=(10, 6))
 
         self.image_sub = self.create_subscription(Image, self.image_topic, self.image_callback, 10)
         self.cmd_sub = self.create_subscription(Twist, self.cmd_vel_topic, self.cmd_callback, 10)
@@ -99,7 +103,7 @@ class DataCollector(Node):
             return
 
         try:
-            cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+            cv_image = self.bridge.imgmsg_to_cv2(msg)
             resized = cv2.resize(cv_image, (self.img_width, self.img_height))
 
             idx_str = f"{self.data_count + 1:05d}"
@@ -117,8 +121,9 @@ class DataCollector(Node):
             self.action_counts[self.command_mode] += 1
             self.data_count += 1
             
-            # ヒストグラムを毎回更新
-            self.display_histogram()
+            # ヒストグラムを毎回更新（save_flagがTrueかつshow_histogramが有効な場合のみ）
+            if self.save_flag and self.show_histogram:
+                self.display_histogram()
             
             self.get_logger().info(f"📸 Sample saved: {idx_str}")
 
@@ -155,38 +160,41 @@ class DataCollector(Node):
             self.save_topomap_image()
 
     def display_histogram(self):
+        # ヒストグラム表示が無効またはfig/axが初期化されていない場合は何もしない
+        if not self.show_histogram or self.fig is None or self.ax is None:
+            return
+            
         actions = list(self.action_counts.keys())
         counts = list(self.action_counts.values())
         
-        # matplotlib で GUI 表示とファイル保存
-        plt.ion()  # インタラクティブモードON
-        plt.figure(figsize=(10, 6))
-        plt.clf()  # 前の描画をクリア
+        # 既存の図をクリアして更新
+        self.ax.clear()
         
-        bars = plt.bar(actions, counts, color=['blue', 'green', 'red'])
-        plt.xlabel('Action Type')
-        plt.ylabel('Count')
-        plt.title(f'Data Collection Histogram (Total: {self.data_count})')
+        bars = self.ax.bar(actions, counts, color=['blue', 'green', 'red'])
+        self.ax.set_xlabel('Action Type')
+        self.ax.set_ylabel('Count')
+        self.ax.set_title(f'Data Collection Histogram (Total: {self.data_count})')
         
         for bar, count in zip(bars, counts):
             height = bar.get_height()
-            plt.text(bar.get_x() + bar.get_width()/2., height + 0.5,
-                    f'{count}', ha='center', va='bottom')
+            self.ax.text(bar.get_x() + bar.get_width()/2., height + 0.5,
+                        f'{count}', ha='center', va='bottom')
         
-        plt.tight_layout()
+        # 図を更新して表示
+        self.fig.canvas.draw()
+        self.fig.canvas.flush_events()
+        plt.pause(0.001)
         
-        # GUI表示（ヘッドレス環境では無視される）
-        try:
-            plt.show(block=False)
-            plt.pause(0.001)
-        except:
-            pass  # GUI表示できない環境では無視
+        # ファイル保存
+        histogram_path = os.path.join(self.dataset_dir, 'data_histogram.png')
+        self.fig.savefig(histogram_path)
         
         self.get_logger().info(f"📊 Histogram updated: straight={counts[0]}, left={counts[1]}, right={counts[2]}")
 
     def destroy_node(self):
-        self.display_histogram()
-        plt.close('all')  # matplotlib ウィンドウを閉じる
+        if self.show_histogram:
+            self.display_histogram()
+            plt.close('all')  # matplotlib ウィンドウを閉じる
         self.map_creator.save_map()
         super().destroy_node()
 
