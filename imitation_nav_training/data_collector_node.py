@@ -9,6 +9,7 @@ from geometry_msgs.msg import Twist
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
+import matplotlib.pyplot as plt
 
 from .topomap_creator_node import TopologicalMapCreator
 from .placenet import PlaceNet
@@ -59,6 +60,7 @@ class DataCollector(Node):
         self.save_flag = False
         self.image_save_counter = 1
         self.data_count = 0
+        self.action_counts = {"straight": 0, "left": 0, "right": 0}
 
         self.image_sub = self.create_subscription(Image, self.image_topic, self.image_callback, 10)
         self.cmd_sub = self.create_subscription(Twist, self.cmd_vel_topic, self.cmd_callback, 10)
@@ -107,7 +109,12 @@ class DataCollector(Node):
             np.savetxt(angle_path, np.array([self.last_ang_vel]), delimiter=",")
             np.savetxt(action_path, np.array([self.action_to_index[self.command_mode]]), fmt='%d', delimiter=",")
 
+            self.action_counts[self.command_mode] += 1
             self.data_count += 1
+            
+            if self.data_count % 100 == 0:
+                self.display_histogram()
+            
             self.get_logger().info(f"📸 Sample saved: {idx_str}")
 
         except Exception as e:
@@ -142,7 +149,36 @@ class DataCollector(Node):
         if self.save_flag and self.data_count > 0:
             self.save_topomap_image()
 
+    def display_histogram(self):
+        actions = list(self.action_counts.keys())
+        counts = list(self.action_counts.values())
+        
+        fig, ax = plt.subplots(figsize=(10, 6))
+        bars = ax.bar(actions, counts, color=['blue', 'green', 'red'])
+        ax.set_xlabel('Action Type')
+        ax.set_ylabel('Count')
+        ax.set_title(f'Data Collection Histogram (Total: {self.data_count})')
+        
+        for bar, count in zip(bars, counts):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height + 0.5,
+                   f'{count}', ha='center', va='bottom')
+        
+        plt.tight_layout()
+        histogram_path = os.path.join(self.dataset_dir, 'data_histogram.png')
+        plt.savefig(histogram_path)
+        
+        hist_img = cv2.imread(histogram_path)
+        if hist_img is not None:
+            cv2.imshow('Data Collection Histogram', hist_img)
+            cv2.waitKey(1)
+        
+        plt.close()
+        self.get_logger().info(f"📊 Histogram updated: straight={counts[0]}, left={counts[1]}, right={counts[2]}")
+
     def destroy_node(self):
+        self.display_histogram()
+        cv2.destroyAllWindows()
         self.map_creator.save_map()
         super().destroy_node()
 

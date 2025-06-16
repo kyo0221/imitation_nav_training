@@ -74,12 +74,11 @@ class ImitationDataset(Dataset):
         shift_signs = [-1.0, 0.0, 1.0] if self.shift_aug else [0.0]
         yaw_signs = [-5.0, 0.0, 5.0] if self.yaw_aug else [0.0]
 
-        # 全組み合わせのインデックス空間を生成
-        aug_combinations = [(s, y) for s in shift_signs for y in yaw_signs]
-        total_aug = len(aug_combinations)
-
-        base_idx = idx // total_aug
-        aug_idx = idx % total_aug
+        # 行動別の拡張組み合わせを定義
+        # action=0(直進): パディング + 射影変換の全組み合わせ
+        # action=1,2(左右折): パディングのみ
+        base_idx = idx // 7 if self.shift_aug else idx
+        aug_idx = idx % 7 if self.shift_aug else 0
 
         image_path, action_path, angle_path = self.samples[base_idx]
 
@@ -88,7 +87,13 @@ class ImitationDataset(Dataset):
         angle = float(np.loadtxt(angle_path, delimiter=",", ndmin=1))
         action = int(np.loadtxt(action_path, delimiter=",", ndmin=1))
 
-        shift_sign, yaw_deg = aug_combinations[aug_idx]
+        # 全行動で同じパディング*射影変換を適用
+        aug_combinations = [(s, y) for s in shift_signs for y in yaw_signs]
+        
+        if aug_idx < len(aug_combinations):
+            shift_sign, yaw_deg = aug_combinations[aug_idx]
+        else:
+            shift_sign, yaw_deg = 0.0, 0.0
 
         # パディング処理（x方向にシフト）
         if shift_sign != 0.0:
@@ -98,7 +103,7 @@ class ImitationDataset(Dataset):
             img = cv2.warpAffine(img, trans_mat, (w, h), borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
             angle -= shift_sign * self.vel_offset
 
-        # 射影変換（yaw方向に回転）
+        # 射影変換（yaw方向に回転）- 全行動に適用
         if yaw_deg != 0.0:
             img = ImitationDataset.apply_yaw_projection(img, yaw_deg=yaw_deg)
             angle -= np.deg2rad(yaw_deg)  # 視点が左向きなら右に補正

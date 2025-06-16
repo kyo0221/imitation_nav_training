@@ -15,6 +15,7 @@ from augment.gamma_augment import GammaWrapperDataset
 from augment.augmix_augment import AugMixWrapperDataset
 from augment.albumentations_augment import AlbumentationsWrapperDataset
 from augment.imitation_dataset import ImitationDataset
+from augment.resampling_dataset import ResamplingWrapperDataset
 
 
 class Config:
@@ -37,6 +38,7 @@ class Config:
         self.model_filename = config['model_filename']
         self.class_names = [name.strip() for name in config['action_classes'][0].split(',')]
         self.augment_method = config['augment']
+        self.resample = config.get('resample', False)
 
 class AugMixConfig:
     def __init__(self):
@@ -280,7 +282,19 @@ if __name__ == '__main__':
         raise ValueError(f"Unknown augmentation method: {config.augment_method}")
 
     print(f"Base dataset size (after rotate_aug): {len(base_dataset)} samples")
-    print(f"Final dataset size after {config.augment_method} augmentation: {len(dataset)} samples")
+    print(f"Dataset size after {config.augment_method} augmentation: {len(dataset)} samples")
+
+    if config.resample:
+        print("Applying action class resampling...")
+        dataset = ResamplingWrapperDataset(
+            base_dataset=dataset,
+            n_action_classes=len(config.class_names),
+            enable_resampling=True
+        )
+    else:
+        print("Resampling disabled.")
+
+    print(f"Final dataset size after resampling: {len(dataset)} samples")
 
     trainer = Training(config, dataset)
     trainer.train()
