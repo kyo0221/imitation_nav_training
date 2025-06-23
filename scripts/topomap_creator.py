@@ -148,7 +148,7 @@ class TopologicalMapCreator:
                 last_node['edges'] = [
                     {
                         'target': len(self.nodes),
-                        'action': 'straight'
+                        'action': 'roadside'
                     }
                 ]
         
@@ -167,9 +167,11 @@ class TopologicalMapCreator:
         """メインループを実行"""
         print("Topological Map Creator")
         print("Controls:")
-        print("  w: straight")
-        print("  a: left") 
-        print("  d: right")
+        print("  r: roadside (道なり)")
+        print("  w: straight (直進)")
+        print("  a: left (左折)") 
+        print("  d: right (右折)")
+        print("  n: next (現状のまま・画像のみ進む)")
         print("  s: go back (undo last input)")
         print("  q: quit and save")
         print("  ESC: quit without saving")
@@ -185,11 +187,16 @@ class TopologicalMapCreator:
                 break
             
             print(f"Current image: {current_image}")
-            print("Enter action (w/a/d) or s to go back, q to quit:")
+            print("Enter action (r/w/a/d) or n to skip, s to go back, q to quit:")
             
             key = cv2.waitKey(0) & 0xFF
             
-            if key == ord('w'):
+            if key == ord('r'):
+                # Roadside
+                if self._add_node(current_image, 'roadside'):
+                    self.current_image_index += 1
+                    
+            elif key == ord('w'):
                 # Straight
                 if self._add_node(current_image, 'straight'):
                     self.current_image_index += 1
@@ -203,6 +210,11 @@ class TopologicalMapCreator:
                 # Right
                 if self._add_node(current_image, 'right'):
                     self.current_image_index += 1
+                    
+            elif key == ord('n'):
+                # Next (skip this image, don't add to map)
+                self.current_image_index += 1
+                print("Skipped image (not added to map)")
                     
             elif key == ord('s'):
                 # Go back
@@ -225,7 +237,7 @@ class TopologicalMapCreator:
                 break
                 
             else:
-                print("Invalid key. Use w/a/d for actions, s to go back, q to quit")
+                print("Invalid key. Use r/w/a/d for actions, n to skip, s to go back, q to quit")
         
         cv2.destroyAllWindows()
         
@@ -235,7 +247,20 @@ class TopologicalMapCreator:
 
 def main():
     if len(sys.argv) < 2:
-        print("Example: python3 topomap_creator.py images/")
+        print("Topological Map Creator - Interactive image labeling tool")
+        print("Usage: python3 topomap_creator.py <image_directory>")
+        print()
+        print("Controls during execution:")
+        print("  r: roadside (道なり)")
+        print("  w: straight (直進)")
+        print("  a: left (左折)")
+        print("  d: right (右折)")
+        print("  n: next (現状のまま・画像のみ進む)")
+        print("  s: go back (undo last input)")
+        print("  q: quit and save")
+        print("  ESC: quit without saving")
+        print()
+        print("Example: python3 topomap_creator.py ../logs/topo_map/images/")
         sys.exit(1)
     
     image_dir = sys.argv[1]
