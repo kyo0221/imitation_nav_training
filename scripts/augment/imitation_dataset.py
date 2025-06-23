@@ -7,7 +7,7 @@ import random
 
 
 class ImitationDataset(Dataset):
-    def __init__(self, dataset_dir, input_size=(88, 200), shift_aug=True, yaw_aug=True,shift_offset=5, vel_offset=0.2, n_action_classes=3, visualize_dir=None):
+    def __init__(self, dataset_dir, input_size=(88, 200), shift_aug=True, yaw_aug=True,shift_offset=5, vel_offset=0.2, n_action_classes=4, visualize_dir=None):
         self.dataset_dir = dataset_dir
         self.image_dir = os.path.join(dataset_dir, "images")
         self.angle_dir = os.path.join(dataset_dir, "angle")
@@ -71,8 +71,8 @@ class ImitationDataset(Dataset):
 
 
     def __getitem__(self, idx):
-        shift_signs = [-1.0, 0.0, 1.0] if self.shift_aug else [0.0]
-        yaw_signs = [-5.0, 0.0, 5.0] if self.yaw_aug else [0.0]
+        shift_signs = [-2.0, -1.0, 0.0, 1.0, 2.0] if self.shift_aug else [0.0]
+        yaw_signs = [0.0] if self.yaw_aug else [0.0]
 
         # 行動別の拡張組み合わせを定義
         # action=0(直進): パディング + 射影変換の全組み合わせ

@@ -64,6 +64,7 @@ class GammaConfig:
 
         self.num_augmented_samples = config['num_augmented_samples']
         self.gamma_range = config['gamma_range']
+        self.contrast_range = config['contrast_range']
         self.visualize_image = config['visualize_image']
 
 class AlbumentationsConfig:
@@ -245,6 +246,7 @@ if __name__ == '__main__':
         dataset = GammaWrapperDataset(
             base_dataset=base_dataset,
             gamma_range=gamma_config.gamma_range,
+            contrast_range=gamma_config.contrast_range,
             num_augmented_samples=gamma_config.num_augmented_samples,
             visualize=gamma_config.visualize_image,
             visualize_dir=os.path.join(config.result_dir, "gamma")

@@ -5,13 +5,15 @@ import numpy as np
 import torch
 import random
 import cv2
+import torchvision.transforms.functional as F
 
 
 class GammaWrapperDataset(Dataset):
     def __init__(self, base_dataset, gamma_range=(0.9, 1.1), num_augmented_samples=1,
-                 visualize=False, visualize_dir=None):
+                 contrast_range=(0.8, 1.2), visualize=False, visualize_dir=None):
         self.base_dataset = base_dataset
         self.gamma_range = gamma_range
+        self.contrast_range = contrast_range
         self.num_augmented_samples = num_augmented_samples
 
         self.visualize = visualize
@@ -31,26 +33,25 @@ class GammaWrapperDataset(Dataset):
 
     def __getitem__(self, index):
         base_idx = index // (1 + self.num_augmented_samples)
-        is_aug = index % (1 + self.num_augmented_samples) != 0
+        aug_idx = index % (1 + self.num_augmented_samples)
+        is_aug = aug_idx != 0
 
         image, action_onehot, angle = self.base_dataset[base_idx]
 
         if is_aug:
-            img_np = (image.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
             gamma = random.uniform(*self.gamma_range)
-            inv_gamma = 1.0 / gamma
-            table = np.array([(i / 255.0) ** inv_gamma * 255 for i in range(256)]).astype("uint8")
-            gamma_img = cv2.LUT(img_np, table)
+            contrast = random.uniform(*self.contrast_range)
+            image = F.adjust_gamma(image, gamma)
+            image = F.adjust_contrast(image, contrast)
+            aug_type = f"gamma{gamma:.2f}_contrast{contrast:.2f}"
 
             if self.visualize and self.visualized_count < self.visualize_limit:
                 if random.random() < self.visualize_prob:
+                    img_np = (image.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
                     save_path = os.path.join(
-                        self.visualize_dir, f"{base_idx:05d}_aug{index}_gamma{gamma:.2f}.png"
+                        self.visualize_dir, f"{base_idx:05d}_aug{index}_{aug_type}.png"
                     )
-                    cv2.imwrite(save_path, gamma_img)
+                    cv2.imwrite(save_path, img_np)
                     self.visualized_count += 1
-
-            with torch.no_grad():
-                image = torch.tensor(gamma_img, dtype=torch.float32).permute(2, 0, 1) / 255.0
 
         return image, action_onehot, angle

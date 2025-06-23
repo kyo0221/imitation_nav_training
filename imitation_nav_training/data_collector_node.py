@@ -57,12 +57,12 @@ class DataCollector(Node):
 
         self.bridge = CvBridge()
         self.last_ang_vel = 0.0
-        self.command_mode = "straight"
-        self.action_to_index = {"straight": 0, "left": 1, "right": 2}
+        self.command_mode = "roadside"
+        self.action_to_index = {"roadside": 0, "straight": 1, "left": 2, "right": 3}
         self.save_flag = False
         self.image_save_counter = 1
         self.data_count = 0
-        self.action_counts = {"straight": 0, "left": 0, "right": 0}
+        self.action_counts = {"roadside": 0, "straight": 0, "left": 0, "right": 0}
         
         # ヒストグラム表示用の図を初期化（パラメータで有効な場合のみ）
         self.fig = None
@@ -88,8 +88,8 @@ class DataCollector(Node):
         if msg.data in self.action_to_index:
             self.command_mode = msg.data
         else:
-            self.get_logger().warn(f"Unknown command: {msg.data}, using 'straight' instead.")
-            self.command_mode = "straight"
+            self.get_logger().warn(f"Unknown command: {msg.data}, using 'roadside' instead.")
+            self.command_mode = "roadside"
 
     def save_callback(self, msg):
         if msg.data:
@@ -170,7 +170,7 @@ class DataCollector(Node):
         # 既存の図をクリアして更新
         self.ax.clear()
         
-        bars = self.ax.bar(actions, counts, color=['blue', 'green', 'red'])
+        bars = self.ax.bar(actions, counts, color=['orange', 'blue', 'green', 'red'])
         self.ax.set_xlabel('Action Type')
         self.ax.set_ylabel('Count')
         self.ax.set_title(f'Data Collection Histogram (Total: {self.data_count})')
@@ -189,7 +189,7 @@ class DataCollector(Node):
         histogram_path = os.path.join(self.dataset_dir, 'data_histogram.png')
         self.fig.savefig(histogram_path)
         
-        self.get_logger().info(f"📊 Histogram updated: straight={counts[0]}, left={counts[1]}, right={counts[2]}")
+        self.get_logger().info(f"📊 Histogram updated: roadside={counts[0]}, straight={counts[1]}, left={counts[2]}, right={counts[3]}")
 
     def destroy_node(self):
         if self.show_histogram:

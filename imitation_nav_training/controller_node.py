@@ -83,27 +83,25 @@ class ControllerNode(Node):
             self.publisher_autonomous.publish(msg_autonomous)
             self.get_logger().info(f'自動フラグ: {self.is_autonomous}')
 
-        if is_pressed(Buttons.Triangle):
-            self._publish_route_command('straight')
-            self.publisher_save_image.publish(Empty())
-
+        triangle_pressed = buttons[Buttons.Triangle] == 1
         left_pressed = buttons[Buttons.L1] == 1 or buttons[Buttons.L2] == 1
-        if left_pressed and not self.prev_left_pressed:
-            self._publish_route_command('left')
-            self.publisher_save_image.publish(Empty())
-        elif not left_pressed and self.prev_left_pressed:
-            self._publish_route_command('straight')
-            self.publisher_save_image.publish(Empty())
-        self.prev_left_pressed = left_pressed
-
         right_pressed = buttons[Buttons.R1] == 1 or buttons[Buttons.R2] == 1
-        if right_pressed and not self.prev_right_pressed:
-            self._publish_route_command('right')
+
+        # 道なり（何も押されていない状態）がデフォルト
+        current_command = 'roadside'
+        
+        if triangle_pressed:
+            current_command = 'straight'
+        elif left_pressed:
+            current_command = 'left'
+        elif right_pressed:
+            current_command = 'right'
+        
+        # 前回と指令が変わった場合のみ送信
+        if not hasattr(self, 'prev_command') or self.prev_command != current_command:
+            self._publish_route_command(current_command)
             self.publisher_save_image.publish(Empty())
-        elif not right_pressed and self.prev_right_pressed:
-            self._publish_route_command('straight')
-            self.publisher_save_image.publish(Empty())
-        self.prev_right_pressed = right_pressed
+            self.prev_command = current_command
 
         if is_pressed(Buttons.L_PRESS):
             self.is_autorun = not self.is_autorun
