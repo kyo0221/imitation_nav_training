@@ -11,20 +11,25 @@ from torchvision.transforms import Compose, Resize, ToTensor, Normalize
 from imitation_nav_training.placenet import PlaceNet
 
 class TopologicalMapCreator:
-    def __init__(self, image_dir: str):
+    def __init__(self, image_dir: str, existing_map_path: str = None):
         pkg_dir = os.path.dirname(os.path.realpath(__file__))
         self.image_dir = image_dir
         self.weight_path = os.path.join(pkg_dir, '..', 'weights', 'efficientnet_85x85.pth')
         self.node_id = 0
         self.nodes = []
+        self.existing_nodes = {}  # 既存のマップからのノード情報
         self.current_image_index = 0
         self.image_files = []
+        self.existing_map_path = existing_map_path
         
         # 画像ファイルのリストを取得
         self._load_image_files()
         
         if not self.image_files:
             raise ValueError(f"No images found in {image_dir}")
+        
+        # 既存のマップを読み込み
+        self._load_existing_map()
         
         # PlaceNetの初期化
         self._initialize_model()
@@ -35,6 +40,29 @@ class TopologicalMapCreator:
             if filename.lower().endswith('.png') and filename.startswith('img'):
                 self.image_files.append(filename)
         self.image_files.sort()
+    
+    def _load_existing_map(self):
+        """既存のマップファイルを読み込む"""
+        if not self.existing_map_path or not os.path.exists(self.existing_map_path):
+            print("No existing map found, starting from scratch")
+            return
+        
+        try:
+            with open(self.existing_map_path, 'r') as f:
+                map_data = yaml.safe_load(f)
+            
+            if map_data and 'nodes' in map_data:
+                for node in map_data['nodes']:
+                    # 画像ファイル名をキーとして既存ノード情報を保存
+                    if 'image' in node:
+                        self.existing_nodes[node['image']] = node
+                print(f"Loaded existing map with {len(self.existing_nodes)} nodes")
+            else:
+                print("Existing map file is empty or invalid")
+                
+        except Exception as e:
+            print(f"Error loading existing map: {e}")
+            print("Starting from scratch")
         
     def _initialize_model(self):
         """PlaceNetモデルを初期化"""
@@ -171,7 +199,7 @@ class TopologicalMapCreator:
         print("  w: straight (直進)")
         print("  a: left (左折)") 
         print("  d: right (右折)")
-        print("  n: next (現状のまま・画像のみ進む)")
+        print("  n: next (既存マップの記述を使用、なければスキップ)")
         print("  s: go back (undo last input)")
         print("  q: quit and save")
         print("  ESC: quit without saving")
@@ -212,9 +240,27 @@ class TopologicalMapCreator:
                     self.current_image_index += 1
                     
             elif key == ord('n'):
-                # Next (skip this image, don't add to map)
+                # Next (use existing node if available, otherwise skip)
+                if current_image in self.existing_nodes:
+                    # 既存のノード情報を使用
+                    existing_node = self.existing_nodes[current_image].copy()
+                    existing_node['id'] = self.node_id  # IDを更新
+                    
+                    # エッジのターゲットIDを調整
+                    if 'edges' in existing_node:
+                        for edge in existing_node['edges']:
+                            if 'target' in edge:
+                                edge['target'] = self.node_id + 1
+                    
+                    self.nodes.append(existing_node)
+                    self.node_id += 1
+                    
+                    action = existing_node.get('edges', [{}])[0].get('action', 'unknown')
+                    print(f"Used existing node: {current_image} with action '{action}'")
+                else:
+                    print(f"No existing node found for {current_image}, skipped")
+                
                 self.current_image_index += 1
-                print("Skipped image (not added to map)")
                     
             elif key == ord('s'):
                 # Go back
@@ -248,29 +294,36 @@ class TopologicalMapCreator:
 def main():
     if len(sys.argv) < 2:
         print("Topological Map Creator - Interactive image labeling tool")
-        print("Usage: python3 topomap_creator.py <image_directory>")
+        print("Usage: python3 topomap_creator.py <image_directory> [existing_map.yaml]")
         print()
         print("Controls during execution:")
         print("  r: roadside (道なり)")
         print("  w: straight (直進)")
         print("  a: left (左折)")
         print("  d: right (右折)")
-        print("  n: next (現状のまま・画像のみ進む)")
+        print("  n: next (既存マップの記述を使用、なければスキップ)")
         print("  s: go back (undo last input)")
         print("  q: quit and save")
         print("  ESC: quit without saving")
         print()
-        print("Example: python3 topomap_creator.py ../logs/topo_map/images/")
+        print("Examples:")
+        print("  python3 topomap_creator.py ../logs/topo_map/images/")
+        print("  python3 topomap_creator.py ../logs/topo_map/images/ topomap.yaml")
         sys.exit(1)
     
     image_dir = sys.argv[1]
+    existing_map_path = sys.argv[2] if len(sys.argv) > 2 else None
     
     if not os.path.exists(image_dir):
         print(f"Error: Image directory '{image_dir}' does not exist")
         sys.exit(1)
     
+    if existing_map_path and not os.path.exists(existing_map_path):
+        print(f"Warning: Existing map file '{existing_map_path}' does not exist")
+        existing_map_path = None
+    
     try:
-        creator = TopologicalMapCreator(image_dir)
+        creator = TopologicalMapCreator(image_dir, existing_map_path)
         creator.run()
     except Exception as e:
         print(f"Error: {e}")
