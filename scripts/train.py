@@ -203,8 +203,21 @@ class Training:
             self.writer.add_scalar('Loss/epoch_avg', avg_loss, epoch)
             self.writer.flush()
 
+            # Save model every 10 epochs
+            if (epoch + 1) % 10 == 0:
+                self.save_intermediate_model(epoch + 1)
+
         self.save_results()
         self.writer.close()
+
+    def save_intermediate_model(self, epoch):
+        scripted_model = torch.jit.script(self.model)
+        base_filename = os.path.splitext(self.config.model_filename)[0]
+        extension = os.path.splitext(self.config.model_filename)[1]
+        intermediate_filename = f"{base_filename}_{epoch}ep{extension}"
+        scripted_path = os.path.join(self.config.result_dir, intermediate_filename)
+        scripted_model.save(scripted_path)
+        print(f"🐜 中間モデルを保存しました: {scripted_path}")
 
     def save_results(self):
         scripted_model = torch.jit.script(self.model)

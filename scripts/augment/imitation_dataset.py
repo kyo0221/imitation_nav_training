@@ -47,7 +47,7 @@ class ImitationDataset(Dataset):
         else:
             return len(self.samples)
         
-    def apply_yaw_projection(image, yaw_deg, fov_deg=90):
+    def apply_yaw_projection(image, yaw_deg, fov_deg=150):
         h, w = image.shape[:2]
         f = w / (2 * np.tan(np.deg2rad(fov_deg / 2)))
 
@@ -71,12 +71,9 @@ class ImitationDataset(Dataset):
 
 
     def __getitem__(self, idx):
-        shift_signs = [-2.0, -1.0, 0.0, 1.0, 2.0] if self.shift_aug else [0.0]
+        shift_signs = [-4.0, -2.0, 0.0, 2.0, 4.0] if self.shift_aug else [0.0]
         yaw_signs = [0.0] if self.yaw_aug else [0.0]
 
-        # 行動別の拡張組み合わせを定義
-        # action=0(直進): パディング + 射影変換の全組み合わせ
-        # action=1,2(左右折): パディングのみ
         base_idx = idx // 7 if self.shift_aug else idx
         aug_idx = idx % 7 if self.shift_aug else 0
 
@@ -106,7 +103,10 @@ class ImitationDataset(Dataset):
         # 射影変換（yaw方向に回転）- 全行動に適用
         if yaw_deg != 0.0:
             img = ImitationDataset.apply_yaw_projection(img, yaw_deg=yaw_deg)
-            angle -= np.deg2rad(yaw_deg)  # 視点が左向きなら右に補正
+            if yaw_deg < 0:
+                angle += 0.4
+            elif yaw_deg > 0:
+                angle -= 0.4
 
         if self.visualize_dir and idx < 100:
             save_path = os.path.join(self.visualize_dir, f"{idx:05d}_a{angle:.2f}_c{action}.png")
