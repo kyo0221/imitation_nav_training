@@ -64,6 +64,7 @@ class GammaConfig:
 
         self.num_augmented_samples = config['num_augmented_samples']
         self.gamma_range = config['gamma_range']
+        self.contrast_range = config['contrast_range']
         self.visualize_image = config['visualize_image']
 
 class AlbumentationsConfig:
@@ -202,8 +203,21 @@ class Training:
             self.writer.add_scalar('Loss/epoch_avg', avg_loss, epoch)
             self.writer.flush()
 
+            # Save model every 10 epochs
+            if (epoch + 1) % 10 == 0:
+                self.save_intermediate_model(epoch + 1)
+
         self.save_results()
         self.writer.close()
+
+    def save_intermediate_model(self, epoch):
+        scripted_model = torch.jit.script(self.model)
+        base_filename = os.path.splitext(self.config.model_filename)[0]
+        extension = os.path.splitext(self.config.model_filename)[1]
+        intermediate_filename = f"{base_filename}_{epoch}ep{extension}"
+        scripted_path = os.path.join(self.config.result_dir, intermediate_filename)
+        scripted_model.save(scripted_path)
+        print(f"🐜 中間モデルを保存しました: {scripted_path}")
 
     def save_results(self):
         scripted_model = torch.jit.script(self.model)
@@ -245,6 +259,7 @@ if __name__ == '__main__':
         dataset = GammaWrapperDataset(
             base_dataset=base_dataset,
             gamma_range=gamma_config.gamma_range,
+            contrast_range=gamma_config.contrast_range,
             num_augmented_samples=gamma_config.num_augmented_samples,
             visualize=gamma_config.visualize_image,
             visualize_dir=os.path.join(config.result_dir, "gamma")

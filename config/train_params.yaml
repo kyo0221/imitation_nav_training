@@ -1,20 +1,21 @@
 train:
-  batch_size: 8          # バッチサイズ（1ステップあたりのサンプル数）
-  epochs: 50               # エポック数（全データを何周するか）
+  batch_size: 128          # バッチサイズ（1ステップあたりのサンプル数）
+  epochs: 30               # エポック数（全データを何周するか）
   learning_rate: 0.0002   # 学習率（Adam最適化器に渡す）
   shuffle: true           # データローダのシャッフル設定（true 推奨）
-  resample: true          # 各行動毎のリサンプリング. trueにすると各行動におけるデータ数が均一になるようにリサンプリングします.
+  resample: false          # 各行動毎のリサンプリング. trueにすると各行動におけるデータ数が均一になるようにリサンプリングします.
   image_height: 88
   image_width: 200
-  action_classes: ["straight, left, right"] # 条件付き模倣学習の制御指令
-  model_filename: model_.test_aug.pt # 出力する学習済みモデルの名前
-  augment: gamma # [None, gamma, augmix]
+  action_classes: ["roadside, straight, left, right"] # 条件付き模倣学習の制御指令
+  model_filename: saituyo2_batch8.pt # 出力する学習済みモデルの名前
+  augment: None # [None, gamma, augmix]
 
 #------以下, データ拡張用のパラメータ-----#
 
 gamma:
-  gamma_range: [0.9, 1.1]               # ランダムガンマ補正の範囲（暗〜明）
-  num_augmented_samples: 5              # 1枚の画像から生成する補正画像の数
+  gamma_range: [1.0, 1.0]               # ランダムガンマ補正の範囲（暗〜明）
+  contrast_range: [0.6, 1.4]            # ランダムコントラスト補正の範囲（低〜高）
+  num_augmented_samples: 10              # 1枚の画像から生成する補正画像の数
   visualize_image: true                 # 拡張済み画像データの可視化
 
 augmix:
