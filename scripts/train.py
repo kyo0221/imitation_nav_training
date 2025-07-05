@@ -23,7 +23,9 @@ class Config:
         package_dir = get_package_share_directory('imitation_nav_training')
         config_path = os.path.join(package_dir, 'config', 'train_params.yaml')
         with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)['train']
+            full_config = yaml.safe_load(f)
+            config = full_config['train']
+            aug_config = full_config.get('augmentation', {})
 
         self.package_dir = os.path.dirname(os.path.realpath(__file__))
         self.result_dir = os.path.join(self.package_dir, '..', 'logs', 'result')
@@ -37,6 +39,14 @@ class Config:
         self.image_width = config['image_width']
         self.model_filename = config['model_filename']
         self.augment_method = config['augment']
+        
+        # データ拡張パラメータ
+        self.shift_signs = aug_config.get('shift_signs', [0.0])
+        self.yaw_signs = aug_config.get('yaw_signs', [0.0])
+        self.shift_offset = aug_config.get('shift_offset', 5)
+        self.vel_offset = aug_config.get('vel_offset', 0.2)
+        self.yaw_base_deg = aug_config.get('yaw_base_deg', 5.0)
+        self.angular_offset_per_deg = aug_config.get('angular_offset_per_deg', 0.04)
 
 class AugMixConfig:
     def __init__(self):
@@ -189,8 +199,12 @@ if __name__ == '__main__':
     base_dataset = ImitationDataset(
         dataset_dir=dataset_dir,
         input_size=(config.image_height, config.image_width),
-        shift_offset=5,
-        vel_offset=0.2,
+        shift_signs=config.shift_signs,
+        yaw_signs=config.yaw_signs,
+        shift_offset=config.shift_offset,
+        vel_offset=config.vel_offset,
+        yaw_base_deg=config.yaw_base_deg,
+        angular_offset_per_deg=config.angular_offset_per_deg,
         visualize_dir=args.visualize_dir
     )
 

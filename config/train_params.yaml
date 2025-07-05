@@ -5,8 +5,17 @@ train:
   shuffle: true           # データローダのシャッフル設定（true 推奨）
   image_height: 224        # ImageNet事前学習済みViT用
   image_width: 224         # ImageNet事前学習済みViT用
-  model_filename: vit_simm.pt # ViTベースの模倣学習モデル
+  model_filename: vit_rot.pt # ViTベースの模倣学習モデル
   augment: None # [None, gamma, augmix]
+
+# データ拡張用のパラメータ
+augmentation:
+  shift_signs: [0.0]  # パディング拡張の倍率
+  yaw_signs: [-1.0, 0.0, 1.0]               # 射影変換の倍率（1.0 = 5度）
+  shift_offset: 5                           # パディング拡張のオフセット量
+  vel_offset: 0.2                          # 角速度オフセット量
+  yaw_base_deg: 5.0                        # 射影変換の基準角度（度）
+  angular_offset_per_deg: 0.04             # 1度あたりの角速度オフセット（0.2/5.0）
 
 #------以下, データ拡張用のパラメータ-----#
 
