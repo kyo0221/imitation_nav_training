@@ -7,17 +7,15 @@ import time
 
 
 class ResamplingWrapperDataset(Dataset):
-    def __init__(self, base_dataset, n_action_classes=3, enable_resampling=True):
+    def __init__(self, base_dataset, enable_resampling=True):
         """
         オーバーサンプリングによる各行動クラスのバランシングWrapper
         
         Args:
             base_dataset: ベースとなるデータセット
-            n_action_classes: 行動クラス数
             enable_resampling: リサンプリングを有効にするかどうか
         """
         self.base_dataset = base_dataset
-        self.n_action_classes = n_action_classes
         self.enable_resampling = enable_resampling
         
         if self.enable_resampling:

@@ -15,7 +15,7 @@ from augment.gamma_augment import GammaWrapperDataset
 from augment.augmix_augment import AugMixWrapperDataset
 from augment.albumentations_augment import AlbumentationsWrapperDataset
 from augment.imitation_dataset import ImitationDataset
-from augment.resampling_dataset import ResamplingWrapperDataset
+import timm
 
 
 class Config:
@@ -36,9 +36,7 @@ class Config:
         self.image_height = config['image_height']
         self.image_width = config['image_width']
         self.model_filename = config['model_filename']
-        self.class_names = [name.strip() for name in config['action_classes'][0].split(',')]
         self.augment_method = config['augment']
-        self.resample = config.get('resample', False)
 
 class AugMixConfig:
     def __init__(self):
@@ -84,84 +82,27 @@ class AlbumentationsConfig:
         self.visualize_image = config['visualize_image']
 
 
-class ConditionalAnglePredictor(nn.Module):
-    def __init__(self, n_channel, n_out, input_height, input_width, n_action_classes):
+class ViTAnglePredictor(nn.Module):
+    def __init__(self, n_channel, n_out, input_height, input_width):
         super().__init__()
-        self.relu = nn.ReLU(inplace=True)
-        self.flatten = nn.Flatten()
-        self.dropout_conv = nn.Dropout2d(p=0.2)
-        self.dropout_fc = nn.Dropout(p=0.5)
-
-        def conv_block(in_channels, out_channels, kernel_size, stride, apply_bn=True):
-            layers = [
-                nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=kernel_size//2),
-                nn.BatchNorm2d(out_channels) if apply_bn else nn.Identity(),
-                self.relu,
-                self.dropout_conv
-            ]
-            return nn.Sequential(*layers)
-
-        self.conv1 = conv_block(n_channel, 32, kernel_size=5, stride=2)
-        self.conv2 = conv_block(32, 48, kernel_size=3, stride=1)
-        self.conv3 = conv_block(48, 64, kernel_size=3, stride=2)
-        self.conv4 = conv_block(64, 96, kernel_size=3, stride=1)
-        self.conv5 = conv_block(96, 128, kernel_size=3, stride=2)
-        self.conv6 = conv_block(128, 160, kernel_size=3, stride=1)
-        self.conv7 = conv_block(160, 192, kernel_size=3, stride=1)
-        self.conv8 = conv_block(192, 256, kernel_size=3, stride=1)
-
-        with torch.no_grad():
-            dummy_input = torch.zeros(1, n_channel, input_height, input_width)
-            x = self.conv1(dummy_input)
-            x = self.conv2(x)
-            x = self.conv3(x)
-            x = self.conv4(x)
-            x = self.conv5(x)
-            x = self.conv6(x)
-            x = self.conv7(x)
-            x = self.conv8(x)
-            x = self.flatten(x)
-            flattened_size = x.shape[1]
-
-        self.fc1 = nn.Linear(flattened_size, 512)
-        self.fc2 = nn.Linear(512, 512)
-
-        self.branches = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(512, 256),
-                self.relu,
-                nn.Linear(256, n_out)
-            ) for _ in range(n_action_classes)
-        ])
-
-        self.cnn_layer = nn.Sequential(
-            self.conv1,
-            self.conv2,
-            self.conv3,
-            self.conv4,
-            self.conv5,
-            self.conv6,
-            self.conv7,
-            self.conv8,
-            self.flatten
+        # ImageNet事前学習済みViT-Base（特徴抽出用、分類ヘッドなし）
+        self.vit = timm.create_model('vit_base_patch16_224', pretrained=True, num_classes=0)
+        vit_features = 768  # ViT-Baseの特徴次元
+        
+        # 回帰用のヘッド
+        self.regression_head = nn.Sequential(
+            nn.LayerNorm(vit_features),
+            nn.Linear(vit_features, 512),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(512, 128),
+            nn.ReLU(),
+            nn.Linear(128, n_out)
         )
 
-    def forward(self, image, action_onehot):
-        features = self.cnn_layer(image)
-        x = self.relu(self.fc1(features))
-        x = self.dropout_fc(x)
-        fc_out = self.relu(self.fc2(x))
-
-        batch_size = image.size(0)
-        action_indices = torch.argmax(action_onehot, dim=1)
-
-        output = torch.zeros(batch_size, self.branches[0][-1].out_features, device=image.device, dtype=fc_out.dtype)
-        for idx, branch in enumerate(self.branches):
-            selected_idx = (action_indices == idx).nonzero().squeeze(1)
-            if selected_idx.numel() > 0:
-                output[selected_idx] = branch(fc_out[selected_idx])
-
-        return output
+    def forward(self, image):
+        features = self.vit(image)
+        return self.regression_head(features)
 
 class Training:
     def __init__(self, config, dataset):
@@ -169,7 +110,7 @@ class Training:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.loader = DataLoader(dataset, batch_size=config.batch_size, num_workers=os.cpu_count() // 20, pin_memory=True, shuffle=config.shuffle)
-        self.model = ConditionalAnglePredictor(3, 1, config.image_height, config.image_width, len(config.class_names)).to(self.device)
+        self.model = ViTAnglePredictor(3, 1, config.image_height, config.image_width).to(self.device)
         self.criterion = nn.MSELoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=config.learning_rate)
         self.writer = SummaryWriter(log_dir=config.result_dir)
@@ -183,12 +124,12 @@ class Training:
             epoch_loss = 0.0
             batch_iter = tqdm(self.loader, desc=f"Epoch {epoch+1}/{self.config.epochs}", leave=False)
             for i, batch in enumerate(batch_iter):
-                images, action_onehots, targets = [x.to(self.device) for x in batch]
+                images, targets = [x.to(self.device) for x in batch]
 
                 self.optimizer.zero_grad()
 
                 with torch.cuda.amp.autocast():
-                    preds = self.model(images, action_onehots)
+                    preds = self.model(images)
                     loss = self.criterion(preds, targets)
 
                 scaler.scale(loss).backward()
@@ -250,7 +191,6 @@ if __name__ == '__main__':
         input_size=(config.image_height, config.image_width),
         shift_offset=5,
         vel_offset=0.2,
-        n_action_classes=len(config.class_names),
         visualize_dir=args.visualize_dir
     )
 
@@ -298,18 +238,6 @@ if __name__ == '__main__':
 
     print(f"Base dataset size (after rotate_aug): {len(base_dataset)} samples")
     print(f"Dataset size after {config.augment_method} augmentation: {len(dataset)} samples")
-
-    if config.resample:
-        print("Applying action class resampling...")
-        dataset = ResamplingWrapperDataset(
-            base_dataset=dataset,
-            n_action_classes=len(config.class_names),
-            enable_resampling=True
-        )
-    else:
-        print("Resampling disabled.")
-
-    print(f"Final dataset size after resampling: {len(dataset)} samples")
 
     trainer = Training(config, dataset)
     trainer.train()

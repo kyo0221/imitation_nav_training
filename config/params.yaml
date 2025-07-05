@@ -6,7 +6,7 @@ launch:
 
 controller:
   ros__parameters:
-    linear_max_vel: 0.4
+    linear_max_vel: 0.6
     angular_max_vel: 1.0
      
 data_collector:
