@@ -7,10 +7,11 @@ import random
 
 
 class ImitationDataset(Dataset):
-    def __init__(self, dataset_dir, input_size=(224, 224), shift_signs=None, yaw_signs=None, shift_offset=5, vel_offset=0.2, yaw_base_deg=5.0, angular_offset_per_deg=0.04, visualize_dir=None):
+    def __init__(self, dataset_dir, input_size=(224, 224), shift_signs=None, yaw_signs=None, shift_offset=5, vel_offset=0.2, yaw_base_deg=5.0, angular_offset_per_deg=0.04, n_action_classes=4, visualize_dir=None):
         self.dataset_dir = dataset_dir
         self.image_dir = os.path.join(dataset_dir, "images")
         self.angle_dir = os.path.join(dataset_dir, "angle")
+        self.action_dir = os.path.join(dataset_dir, "action")
         self.input_size = input_size
         self.shift_signs = shift_signs if shift_signs is not None else [0.0]
         self.yaw_signs = yaw_signs if yaw_signs is not None else [0.0]
@@ -18,6 +19,7 @@ class ImitationDataset(Dataset):
         self.vel_offset = vel_offset
         self.yaw_base_deg = yaw_base_deg
         self.angular_offset_per_deg = angular_offset_per_deg
+        self.n_action_classes = n_action_classes
         self.visualize_dir = visualize_dir
 
         self.samples = self._gather_sample_paths()
@@ -34,9 +36,10 @@ class ImitationDataset(Dataset):
             base = fname[:-4]
             image_path = os.path.join(self.image_dir, base + ".png")
             angle_path = os.path.join(self.angle_dir, base + ".csv")
+            action_path = os.path.join(self.action_dir, base + ".csv")
 
-            if os.path.exists(image_path) and os.path.exists(angle_path):
-                samples.append((image_path, angle_path))
+            if os.path.exists(image_path) and os.path.exists(angle_path) and os.path.exists(action_path):
+                samples.append((image_path, angle_path, action_path))
 
         return samples
 
@@ -81,11 +84,12 @@ class ImitationDataset(Dataset):
         shift_sign = self.shift_signs[shift_idx]
         yaw_sign = self.yaw_signs[yaw_idx]
 
-        image_path, angle_path = self.samples[base_idx]
+        image_path, angle_path, action_path = self.samples[base_idx]
 
         img = cv2.imread(image_path)
         img = cv2.resize(img, self.input_size[::-1])
         angle = float(np.loadtxt(angle_path, delimiter=",", ndmin=1))
+        action = int(np.loadtxt(action_path, delimiter=",", ndmin=1))
 
         # パディング処理（x方向にシフト）
         if shift_sign != 0.0:
@@ -107,10 +111,12 @@ class ImitationDataset(Dataset):
                 angle -= angle_offset
 
         if self.visualize_dir and idx < 100:
-            save_path = os.path.join(self.visualize_dir, f"{idx:05d}_s{shift_sign:.1f}_y{yaw_sign:.1f}_a{angle:.2f}.png")
+            save_path = os.path.join(self.visualize_dir, f"{idx:05d}_s{shift_sign:.1f}_y{yaw_sign:.1f}_a{angle:.2f}_c{action}.png")
             cv2.imwrite(save_path, img)
 
         img_tensor = torch.tensor(img, dtype=torch.float32).permute(2, 0, 1) / 255.0
         angle_tensor = torch.tensor([angle], dtype=torch.float32)
+        action_tensor = torch.tensor(action, dtype=torch.long)
+        action_onehot = torch.nn.functional.one_hot(action_tensor, num_classes=self.n_action_classes).squeeze().float()
 
-        return img_tensor, angle_tensor
+        return img_tensor, action_onehot, angle_tensor

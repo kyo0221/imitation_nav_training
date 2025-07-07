@@ -47,6 +47,9 @@ class Config:
         self.vel_offset = aug_config.get('vel_offset', 0.2)
         self.yaw_base_deg = aug_config.get('yaw_base_deg', 5.0)
         self.angular_offset_per_deg = aug_config.get('angular_offset_per_deg', 0.04)
+        
+        # 条件付き模倣学習用
+        self.action_classes = ["roadside", "straight", "left", "right"]
 
 class AugMixConfig:
     def __init__(self):
@@ -92,27 +95,45 @@ class AlbumentationsConfig:
         self.visualize_image = config['visualize_image']
 
 
-class ViTAnglePredictor(nn.Module):
-    def __init__(self, n_channel, n_out, input_height, input_width):
+class ViTConditionalAnglePredictor(nn.Module):
+    def __init__(self, n_channel, n_out, input_height, input_width, n_action_classes):
         super().__init__()
+        self.relu = nn.ReLU(inplace=True)
+        self.dropout_fc = nn.Dropout(p=0.5)
+        
         # ImageNet事前学習済みViT-Base（特徴抽出用、分類ヘッドなし）
         self.vit = timm.create_model('vit_base_patch16_224', pretrained=True, num_classes=0)
         vit_features = 768  # ViT-Baseの特徴次元
         
-        # 回帰用のヘッド
-        self.regression_head = nn.Sequential(
-            nn.LayerNorm(vit_features),
-            nn.Linear(vit_features, 512),
-            nn.ReLU(),
-            nn.Dropout(0.5),
-            nn.Linear(512, 128),
-            nn.ReLU(),
-            nn.Linear(128, n_out)
-        )
+        # 共通の全結合層
+        self.fc1 = nn.Linear(vit_features, 512)
+        self.fc2 = nn.Linear(512, 512)
+        
+        # 各アクションクラス用の分岐
+        self.branches = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(512, 256),
+                self.relu,
+                nn.Linear(256, n_out)
+            ) for _ in range(n_action_classes)
+        ])
 
-    def forward(self, image):
+    def forward(self, image, action_onehot):
         features = self.vit(image)
-        return self.regression_head(features)
+        x = self.relu(self.fc1(features))
+        x = self.dropout_fc(x)
+        fc_out = self.relu(self.fc2(x))
+
+        batch_size = image.size(0)
+        action_indices = torch.argmax(action_onehot, dim=1)
+
+        output = torch.zeros(batch_size, self.branches[0][-1].out_features, device=image.device, dtype=fc_out.dtype)
+        for idx, branch in enumerate(self.branches):
+            selected_idx = (action_indices == idx).nonzero().squeeze(1)
+            if selected_idx.numel() > 0:
+                output[selected_idx] = branch(fc_out[selected_idx])
+
+        return output
 
 class Training:
     def __init__(self, config, dataset):
@@ -120,7 +141,7 @@ class Training:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.loader = DataLoader(dataset, batch_size=config.batch_size, num_workers=os.cpu_count() // 20, pin_memory=True, shuffle=config.shuffle)
-        self.model = ViTAnglePredictor(3, 1, config.image_height, config.image_width).to(self.device)
+        self.model = ViTConditionalAnglePredictor(3, 1, config.image_height, config.image_width, len(config.action_classes)).to(self.device)
         self.criterion = nn.MSELoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=config.learning_rate)
         self.writer = SummaryWriter(log_dir=config.result_dir)
@@ -134,12 +155,12 @@ class Training:
             epoch_loss = 0.0
             batch_iter = tqdm(self.loader, desc=f"Epoch {epoch+1}/{self.config.epochs}", leave=False)
             for i, batch in enumerate(batch_iter):
-                images, targets = [x.to(self.device) for x in batch]
+                images, action_onehots, targets = [x.to(self.device) for x in batch]
 
                 self.optimizer.zero_grad()
 
                 with torch.cuda.amp.autocast():
-                    preds = self.model(images)
+                    preds = self.model(images, action_onehots)
                     loss = self.criterion(preds, targets)
 
                 scaler.scale(loss).backward()
@@ -205,6 +226,7 @@ if __name__ == '__main__':
         vel_offset=config.vel_offset,
         yaw_base_deg=config.yaw_base_deg,
         angular_offset_per_deg=config.angular_offset_per_deg,
+        n_action_classes=len(config.action_classes),
         visualize_dir=args.visualize_dir
     )
 
