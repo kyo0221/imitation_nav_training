@@ -84,9 +84,10 @@ class AlbumentationsConfig:
         self.visualize_image = config['visualize_image']
 
 
-class ConditionalAnglePredictor(nn.Module):
-    def __init__(self, n_channel, n_out, input_height, input_width, n_action_classes):
+class ConditionalFuturePredictor(nn.Module):
+    def __init__(self, n_channel, future_steps, input_height, input_width, n_action_classes):
         super().__init__()
+        self.future_steps = future_steps
         self.relu = nn.ReLU(inplace=True)
         self.flatten = nn.Flatten()
         self.dropout_conv = nn.Dropout2d(p=0.2)
@@ -130,7 +131,7 @@ class ConditionalAnglePredictor(nn.Module):
             nn.Sequential(
                 nn.Linear(512, 256),
                 self.relu,
-                nn.Linear(256, n_out)
+                nn.Linear(256, future_steps)
             ) for _ in range(n_action_classes)
         ])
 
@@ -146,8 +147,6 @@ class ConditionalAnglePredictor(nn.Module):
             self.flatten
         )
 
-        self.lstm = nn.LSTM(input_size=512, hidden_size=512, num_layers=1, batch_first=True)
-
 
     def forward(self, image, action_onehot):
         features = self.cnn_layer(image)
@@ -158,7 +157,7 @@ class ConditionalAnglePredictor(nn.Module):
         batch_size = image.size(0)
         action_indices = torch.argmax(action_onehot, dim=1)
 
-        output = torch.zeros(batch_size, self.branches[0][-1].out_features, device=image.device, dtype=fc_out.dtype)
+        output = torch.zeros(batch_size, self.future_steps, device=image.device, dtype=fc_out.dtype)
         for idx, branch in enumerate(self.branches):
             selected_idx = (action_indices == idx).nonzero().squeeze(1)
             if selected_idx.numel() > 0:
@@ -172,7 +171,7 @@ class Training:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.loader = DataLoader(dataset, batch_size=config.batch_size, num_workers=os.cpu_count() // 20, pin_memory=True, shuffle=config.shuffle)
-        self.model = ConditionalAnglePredictor(3, 1, config.image_height, config.image_width, len(config.class_names)).to(self.device)
+        self.model = ConditionalFuturePredictor(3, 20, config.image_height, config.image_width, len(config.class_names)).to(self.device)
         self.criterion = nn.MSELoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=config.learning_rate)
         self.writer = SummaryWriter(log_dir=config.result_dir)
@@ -254,7 +253,8 @@ if __name__ == '__main__':
         shift_offset=5,
         vel_offset=0.2,
         n_action_classes=len(config.class_names),
-        visualize_dir=args.visualize_dir
+        visualize_dir=args.visualize_dir,
+        future_steps=20
     )
 
     if config.augment_method == "gamma":
