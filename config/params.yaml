@@ -6,8 +6,8 @@ launch:
 
 controller:
   ros__parameters:
-    linear_max_vel: 0.4
-    angular_max_vel: 1.0
+    linear_max_vel: 0.8
+    angular_max_vel: 1.57
      
 data_collector:
   ros__parameters:
@@ -19,5 +19,5 @@ data_collector:
     dataset_folder: "dataset"
     max_data_count: 1000000
     interval_ms: 200
-    save_node_freq: 3 # [s]
+    save_node_freq: 1 # [s]
     show_histogram: true

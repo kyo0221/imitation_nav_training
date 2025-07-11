@@ -146,6 +146,9 @@ class ConditionalAnglePredictor(nn.Module):
             self.flatten
         )
 
+        self.lstm = nn.LSTM(input_size=512, hidden_size=512, num_layers=1, batch_first=True)
+
+
     def forward(self, image, action_onehot):
         features = self.cnn_layer(image)
         x = self.relu(self.fc1(features))

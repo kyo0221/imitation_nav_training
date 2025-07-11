@@ -1,13 +1,13 @@
 train:
   batch_size: 128          # バッチサイズ（1ステップあたりのサンプル数）
-  epochs: 30               # エポック数（全データを何周するか）
+  epochs: 100               # エポック数（全データを何周するか）
   learning_rate: 0.0002   # 学習率（Adam最適化器に渡す）
   shuffle: true           # データローダのシャッフル設定（true 推奨）
   resample: false          # 各行動毎のリサンプリング. trueにすると各行動におけるデータ数が均一になるようにリサンプリングします.
   image_height: 88
   image_width: 200
   action_classes: ["roadside, straight, left, right"] # 条件付き模倣学習の制御指令
-  model_filename: saituyo2_batch8.pt # 出力する学習済みモデルの名前
+  model_filename: simtest_simple.pt # 出力する学習済みモデルの名前
   augment: None # [None, gamma, augmix]
 
 #------以下, データ拡張用のパラメータ-----#

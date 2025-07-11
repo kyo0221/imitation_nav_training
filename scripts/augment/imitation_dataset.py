@@ -71,7 +71,7 @@ class ImitationDataset(Dataset):
 
 
     def __getitem__(self, idx):
-        shift_signs = [-4.0, -2.0, 0.0, 2.0, 4.0] if self.shift_aug else [0.0]
+        shift_signs = [-2.0, -1.0, 0.0, 1.0, 2.0] if self.shift_aug else [0.0]
         yaw_signs = [0.0] if self.yaw_aug else [0.0]
 
         base_idx = idx // 7 if self.shift_aug else idx

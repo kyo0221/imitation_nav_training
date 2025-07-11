@@ -18,8 +18,9 @@ class ImageRBSwapper:
     
     def _is_target_image_file(self, filename: str) -> bool:
         """XXXXX.png形式のファイルかどうかをチェック"""
-        pattern = r'^\d{5}\.png$'
-        return bool(re.match(pattern, filename.lower()))
+        pattern1 = r'^\d{5}\.png$'
+        pattern2 = r'^img\d{5}\.png$'
+        return bool(re.match(pattern1, filename.lower()) or re.match(pattern2, filename.lower()))
     
     def _get_image_files(self) -> list:
         """入力ディレクトリからXXXXX.png形式のファイルのリストを取得"""
