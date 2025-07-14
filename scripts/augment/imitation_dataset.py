@@ -84,7 +84,6 @@ class ImitationDataset(Dataset):
         angle = float(np.loadtxt(angle_path, delimiter=",", ndmin=1))
         action = int(np.loadtxt(action_path, delimiter=",", ndmin=1))
 
-        # 全行動で同じパディング*射影変換を適用
         aug_combinations = [(s, y) for s in shift_signs for y in yaw_signs]
         
         if aug_idx < len(aug_combinations):

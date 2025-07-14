@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 from ament_index_python.packages import get_package_share_directory
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+import torchvision.models as models
 
 from augment.gamma_augment import GammaWrapperDataset
 from augment.augmix_augment import AugMixWrapperDataset
@@ -89,41 +90,27 @@ class ConditionalAnglePredictor(nn.Module):
         super().__init__()
         self.relu = nn.ReLU(inplace=True)
         self.flatten = nn.Flatten()
-        self.dropout_conv = nn.Dropout2d(p=0.2)
         self.dropout_fc = nn.Dropout(p=0.5)
 
-        def conv_block(in_channels, out_channels, kernel_size, stride, apply_bn=True):
-            layers = [
-                nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, padding=kernel_size//2),
-                nn.BatchNorm2d(out_channels) if apply_bn else nn.Identity(),
-                self.relu,
-                self.dropout_conv
-            ]
-            return nn.Sequential(*layers)
-
-        self.conv1 = conv_block(n_channel, 32, kernel_size=5, stride=2)
-        self.conv2 = conv_block(32, 48, kernel_size=3, stride=1)
-        self.conv3 = conv_block(48, 64, kernel_size=3, stride=2)
-        self.conv4 = conv_block(64, 96, kernel_size=3, stride=1)
-        self.conv5 = conv_block(96, 128, kernel_size=3, stride=2)
-        self.conv6 = conv_block(128, 160, kernel_size=3, stride=1)
-        self.conv7 = conv_block(160, 192, kernel_size=3, stride=1)
-        self.conv8 = conv_block(192, 256, kernel_size=3, stride=1)
-
+        # ResNet18 backbone
+        resnet18 = models.resnet18(pretrained=True)
+        if n_channel != 3:
+            resnet18.conv1 = nn.Conv2d(n_channel, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        
+        # 最後の全結合層とAvgPoolを削除してバックボーンを取得
+        self.resnet_backbone = nn.Sequential(*list(resnet18.children())[:-2])
+        
+        # ResNet18の出力次元を計算
         with torch.no_grad():
             dummy_input = torch.zeros(1, n_channel, input_height, input_width)
-            x = self.conv1(dummy_input)
-            x = self.conv2(x)
-            x = self.conv3(x)
-            x = self.conv4(x)
-            x = self.conv5(x)
-            x = self.conv6(x)
-            x = self.conv7(x)
-            x = self.conv8(x)
+            x = self.resnet_backbone(dummy_input)
+            x = nn.AdaptiveAvgPool2d((1, 1))(x)
             x = self.flatten(x)
-            flattened_size = x.shape[1]
-
-        self.fc1 = nn.Linear(flattened_size, 512)
+            resnet_features = x.shape[1]  # ResNet18では512
+        
+        # MLP部分（ResNet18の出力次元に合わせて）
+        self.adaptive_pool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc1 = nn.Linear(resnet_features, 512)
         self.fc2 = nn.Linear(512, 512)
 
         self.branches = nn.ModuleList([
@@ -135,26 +122,23 @@ class ConditionalAnglePredictor(nn.Module):
         ])
 
         self.cnn_layer = nn.Sequential(
-            self.conv1,
-            self.conv2,
-            self.conv3,
-            self.conv4,
-            self.conv5,
-            self.conv6,
-            self.conv7,
-            self.conv8,
+            self.resnet_backbone,
+            self.adaptive_pool,
             self.flatten
         )
 
+        # LSTMは維持
         self.lstm = nn.LSTM(input_size=512, hidden_size=512, num_layers=1, batch_first=True)
 
 
     def forward(self, image, action_onehot):
+        # ResNet18で特徴抽出
         features = self.cnn_layer(image)
         x = self.relu(self.fc1(features))
         x = self.dropout_fc(x)
         fc_out = self.relu(self.fc2(x))
 
+        # 条件付き模倣学習のブランチ処理（変更なし）
         batch_size = image.size(0)
         action_indices = torch.argmax(action_onehot, dim=1)
 
