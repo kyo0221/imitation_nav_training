@@ -86,7 +86,7 @@ class AlbumentationsConfig:
 
 
 class ConditionalAnglePredictor(nn.Module):
-    def __init__(self, n_channel, n_out, input_height, input_width, n_action_classes):
+    def __init__(self, n_channel, future_steps, input_height, input_width, n_action_classes):
         super().__init__()
         self.relu = nn.ReLU(inplace=True)
         self.flatten = nn.Flatten()
@@ -97,7 +97,6 @@ class ConditionalAnglePredictor(nn.Module):
         if n_channel != 3:
             resnet18.conv1 = nn.Conv2d(n_channel, 64, kernel_size=7, stride=2, padding=3, bias=False)
         
-        # 最後の全結合層とAvgPoolを削除してバックボーンを取得
         self.resnet_backbone = nn.Sequential(*list(resnet18.children())[:-2])
         
         # ResNet18の出力次元を計算
@@ -117,7 +116,7 @@ class ConditionalAnglePredictor(nn.Module):
             nn.Sequential(
                 nn.Linear(512, 256),
                 self.relu,
-                nn.Linear(256, n_out)
+                nn.Linear(256, future_steps)
             ) for _ in range(n_action_classes)
         ])
 
@@ -127,7 +126,6 @@ class ConditionalAnglePredictor(nn.Module):
             self.flatten
         )
 
-        # LSTMは維持
         self.lstm = nn.LSTM(input_size=512, hidden_size=512, num_layers=1, batch_first=True)
 
 
@@ -156,7 +154,7 @@ class Training:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.loader = DataLoader(dataset, batch_size=config.batch_size, num_workers=os.cpu_count() // 20, pin_memory=True, shuffle=config.shuffle)
-        self.model = ConditionalAnglePredictor(3, 1, config.image_height, config.image_width, len(config.class_names)).to(self.device)
+        self.model = ConditionalAnglePredictor(3, 20, config.image_height, config.image_width, len(config.class_names)).to(self.device)
         self.criterion = nn.MSELoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=config.learning_rate)
         self.writer = SummaryWriter(log_dir=config.result_dir)
@@ -238,7 +236,8 @@ if __name__ == '__main__':
         shift_offset=5,
         vel_offset=0.2,
         n_action_classes=len(config.class_names),
-        visualize_dir=args.visualize_dir
+        visualize_dir=args.visualize_dir,
+        future_steps=20
     )
 
     if config.augment_method == "gamma":
