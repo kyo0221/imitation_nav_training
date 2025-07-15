@@ -40,6 +40,8 @@ class Config:
         self.class_names = [name.strip() for name in config['action_classes'][0].split(',')]
         self.augment_method = config['augment']
         self.resample = config.get('resample', False)
+        self.freeze_resnet_backbone = config.get('freeze_resnet_backbone', True)
+
 
 class AugMixConfig:
     def __init__(self):
@@ -56,6 +58,7 @@ class AugMixConfig:
         self.operations = config['operations']
         self.visualize_image = config['visualize_image']
 
+
 class GammaConfig:
     def __init__(self):
         package_dir = get_package_share_directory('imitation_nav_training')
@@ -67,6 +70,7 @@ class GammaConfig:
         self.gamma_range = config['gamma_range']
         self.contrast_range = config['contrast_range']
         self.visualize_image = config['visualize_image']
+
 
 class AlbumentationsConfig:
     def __init__(self):
@@ -86,8 +90,8 @@ class AlbumentationsConfig:
 
 
 class ConditionalAnglePredictor(nn.Module):
-    def __init__(self, n_channel, future_steps, input_height, input_width, n_action_classes):
-        super().__init__()
+    def __init__(self, n_channel, future_steps, input_height, input_width, n_action_classes, freeze_resnet_backbone=True):
+        super(ConditionalAnglePredictor, self).__init__()
         self.relu = nn.ReLU(inplace=True)
         self.flatten = nn.Flatten()
         self.dropout_fc = nn.Dropout(p=0.5)
@@ -98,7 +102,13 @@ class ConditionalAnglePredictor(nn.Module):
             resnet18.conv1 = nn.Conv2d(n_channel, 64, kernel_size=7, stride=2, padding=3, bias=False)
         
         self.resnet_backbone = nn.Sequential(*list(resnet18.children())[:-2])
-        
+
+        # Freeze ResNet backbone if specified
+        if freeze_resnet_backbone:
+            for param in self.resnet_backbone.parameters():
+                param.requires_grad = False
+            print("🔒 ResNet backbone parameters frozen. Only MLP layers will be trained.")
+
         # ResNet18の出力次元を計算
         with torch.no_grad():
             dummy_input = torch.zeros(1, n_channel, input_height, input_width)
@@ -148,13 +158,14 @@ class ConditionalAnglePredictor(nn.Module):
 
         return output
 
+
 class Training:
     def __init__(self, config, dataset):
         self.config = config
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.loader = DataLoader(dataset, batch_size=config.batch_size, num_workers=os.cpu_count() // 20, pin_memory=True, shuffle=config.shuffle)
-        self.model = ConditionalAnglePredictor(3, 20, config.image_height, config.image_width, len(config.class_names)).to(self.device)
+        self.model = ConditionalAnglePredictor(3, 20, config.image_height, config.image_width, len(config.class_names), config.freeze_resnet_backbone).to(self.device)
         self.criterion = nn.MSELoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=config.learning_rate)
         self.writer = SummaryWriter(log_dir=config.result_dir)
