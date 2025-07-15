@@ -89,7 +89,7 @@ def convert_to_webdataset(input_dir, output_dir, samples_per_shard=1000, enable_
                     print(f"Warning: Could not read image {image_file}, skipping...")
                     continue
                 
-                # numpy形式で保存
+                # numpy形式で保存（バイト列として）
                 img_data = img.tobytes()
                 img_ext = "npy"
                 
