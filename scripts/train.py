@@ -15,8 +15,8 @@ import torchvision.models as models
 from augment.gamma_augment import GammaWrapperDataset
 from augment.augmix_augment import AugMixWrapperDataset
 from augment.albumentations_augment import AlbumentationsWrapperDataset
-from augment.imitation_dataset import ImitationDataset
 from augment.resampling_dataset import ResamplingWrapperDataset
+from augment.webdataset_loader import WebDatasetLoader
 
 
 class Config:
@@ -232,21 +232,27 @@ if __name__ == '__main__':
     import warnings
     warnings.filterwarnings("ignore", category=UserWarning)
     parser = argparse.ArgumentParser()
-    parser.add_argument('dataset', type=str, help='Path to dataset directory (contains images/, angle/, action/)')
+    parser.add_argument('dataset', type=str, help='Path to dataset directory (contains webdataset/)')
     parser.add_argument('visualize_dir', nargs='?', default=None, help='Optional directory to save visualized samples')
     args = parser.parse_args()
 
     config = Config()
     dataset_dir = args.dataset
 
-    base_dataset = ImitationDataset(
-        dataset_dir=dataset_dir,
+    # WebDatasetを使用
+    webdataset_dir = os.path.join(dataset_dir, 'webdataset')
+    if not os.path.exists(webdataset_dir):
+        raise ValueError(f"WebDataset directory not found: {webdataset_dir}")
+    
+    base_dataset = WebDatasetLoader(
+        dataset_dir=webdataset_dir,
         input_size=(config.image_height, config.image_width),
         shift_offset=5,
         vel_offset=0.2,
         n_action_classes=len(config.class_names),
         visualize_dir=args.visualize_dir
     )
+    print(f"Using WebDataset from: {webdataset_dir}")
 
     if config.augment_method == "gamma":
         gamma_config = GammaConfig()
