@@ -18,7 +18,7 @@ data_collector:
     image_width: 200
     dataset_folder: "dataset"
     max_data_count: 1000000
-    interval_ms: 200
+    interval_ms: 100
     save_node_freq: 1 # [s]
     show_histogram: true
     samples_per_shard: 1000

@@ -244,6 +244,19 @@ if __name__ == '__main__':
     if not os.path.exists(webdataset_dir):
         raise ValueError(f"WebDataset directory not found: {webdataset_dir}")
     
+    # 拡張なしのベースデータセットを作成（生データセットサイズ用）
+    raw_dataset = WebDatasetLoader(
+        dataset_dir=webdataset_dir,
+        input_size=(config.image_height, config.image_width),
+        shift_aug=False,  # 拡張なし
+        yaw_aug=False,    # 拡張なし
+        shift_offset=5,
+        vel_offset=0.2,
+        n_action_classes=len(config.class_names),
+        visualize_dir=None
+    )
+    
+    # データ拡張ありのベースデータセットを作成
     base_dataset = WebDatasetLoader(
         dataset_dir=webdataset_dir,
         input_size=(config.image_height, config.image_width),
@@ -252,7 +265,10 @@ if __name__ == '__main__':
         n_action_classes=len(config.class_names),
         visualize_dir=args.visualize_dir
     )
+    
     print(f"Using WebDataset from: {webdataset_dir}")
+    print(f"Raw dataset size (no augmentation): {len(raw_dataset)} samples")
+    print(f"Base dataset size (with shift/yaw augmentation): {len(base_dataset)} samples")
 
     if config.augment_method == "gamma":
         gamma_config = GammaConfig()
@@ -296,20 +312,43 @@ if __name__ == '__main__':
     else:
         raise ValueError(f"Unknown augmentation method: {config.augment_method}")
 
-    print(f"Base dataset size (after rotate_aug): {len(base_dataset)} samples")
     print(f"Dataset size after {config.augment_method} augmentation: {len(dataset)} samples")
+    
+    # データセットサイズの比較表示
+    raw_size = len(raw_dataset)
+    base_size = len(base_dataset)
+    augmented_size = len(dataset)
+    
+    print("\n" + "="*50)
+    print("DATASET SIZE SUMMARY")
+    print("="*50)
+    print(f"Raw dataset (no augmentation):      {raw_size:,} samples")
+    print(f"Base dataset (shift/yaw aug):       {base_size:,} samples (x{base_size/raw_size:.1f})")
+    print(f"After {config.augment_method} augmentation:        {augmented_size:,} samples (x{augmented_size/raw_size:.1f})")
+    print("="*50)
 
     if config.resample:
         print("Applying action class resampling...")
+        pre_resample_size = len(dataset)
         dataset = ResamplingWrapperDataset(
             base_dataset=dataset,
             n_action_classes=len(config.class_names),
             enable_resampling=True
         )
+        post_resample_size = len(dataset)
+        print(f"Resampling: {pre_resample_size:,} -> {post_resample_size:,} samples")
     else:
         print("Resampling disabled.")
 
-    print(f"Final dataset size after resampling: {len(dataset)} samples")
+    final_size = len(dataset)
+    print(f"Final dataset size after resampling: {final_size:,} samples")
+    
+    # 最終的なデータセットサイズの比較
+    if config.resample:
+        print(f"Total augmentation factor: x{final_size/raw_size:.1f} (from {raw_size:,} to {final_size:,} samples)")
+    else:
+        print(f"Total augmentation factor: x{augmented_size/raw_size:.1f} (from {raw_size:,} to {augmented_size:,} samples)")
+    print("")
 
     trainer = Training(config, dataset)
     trainer.train()

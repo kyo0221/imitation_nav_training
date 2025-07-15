@@ -107,8 +107,13 @@ class DataCollector(Node):
 
     def _init_shard_writer(self):
         """新しいシャードライターを初期化"""
+        # 前のシャードライターを閉じる
         if self.shard_writer is not None:
-            self.shard_writer.close()
+            try:
+                self.shard_writer.close()
+                self.get_logger().info(f"🗂️ シャード {self.current_shard} を閉じました")
+            except Exception as e:
+                self.get_logger().error(f"シャードクローズエラー: {e}")
         
         # WebDatasetのShardWriterは%形式のパターンを期待する
         if self.enable_compression:
@@ -116,12 +121,13 @@ class DataCollector(Node):
         else:
             shard_pattern = os.path.join(self.webdataset_dir, "shard_%06d.tar")
         
+        # 新しいシャードライターを作成
         self.shard_writer = wds.ShardWriter(shard_pattern, maxcount=self.samples_per_shard)
         self.current_shard_count = 0
         
         # 実際のファイル名を表示用に生成
         actual_filename = shard_pattern % self.current_shard
-        self.get_logger().info(f"🗂️ 新しいシャードを開始: {actual_filename}")
+        self.get_logger().info(f"🗂️ 新しいシャードを開始: {actual_filename} (maxcount={self.samples_per_shard})")
 
     def _get_current_shard_size(self):
         """現在のシャードのサイズを取得"""
@@ -192,6 +198,7 @@ class DataCollector(Node):
             
             # シャードが満杯になったら新しいシャードを開始
             if self.current_shard_count >= self.samples_per_shard:
+                self.get_logger().info(f"🗂️ シャード {self.current_shard} が満杯になりました ({self.current_shard_count}/{self.samples_per_shard})")
                 self._log_data_stats()
                 self.current_shard += 1
                 self._init_shard_writer()
@@ -303,6 +310,29 @@ class DataCollector(Node):
         self.fig.savefig(histogram_path)
         
         self.get_logger().info(f"📊 Histogram updated: roadside={counts[0]}, straight={counts[1]}, left={counts[2]}, right={counts[3]}")
+    
+    def _save_dataset_stats(self):
+        """データセット統計情報を保存"""
+        stats = {
+            "total_samples": self.data_count,
+            "total_shards": self.current_shard + 1,
+            "samples_per_shard": self.samples_per_shard,
+            "compression_enabled": self.enable_compression,
+            "save_format": "numpy",
+            "swap_rb_channels": self.swap_rb_channels,
+            "action_distribution": dict(self.action_counts),
+            "dataset_directory": self.webdataset_dir,
+            "image_size": [self.img_height, self.img_width],
+            "max_data_count": self.max_data_count
+        }
+        
+        stats_file = os.path.join(self.webdataset_dir, "dataset_stats.json")
+        try:
+            with open(stats_file, 'w') as f:
+                json.dump(stats, f, indent=2)
+            self.get_logger().info(f"📊 統計情報を保存: {stats_file}")
+        except Exception as e:
+            self.get_logger().error(f"統計情報保存エラー: {e}")
 
     def destroy_node(self):
         if self.show_histogram:
@@ -312,8 +342,15 @@ class DataCollector(Node):
         # WebDatasetの保存を完了
         if self.shard_writer is not None:
             self._log_data_stats()
-            self.shard_writer.close()
-            self.get_logger().info("🗂️ WebDataset保存完了")
+            try:
+                self.shard_writer.close()
+                self.get_logger().info(f"🗂️ 最終シャード {self.current_shard} を閉じました")
+                self.get_logger().info(f"🗂️ WebDataset保存完了 - 総シャード数: {self.current_shard + 1}")
+            except Exception as e:
+                self.get_logger().error(f"最終シャードクローズエラー: {e}")
+        
+        # 統計情報ファイルを保存
+        self._save_dataset_stats()
         
         self.map_creator.save_map()
         super().destroy_node()
