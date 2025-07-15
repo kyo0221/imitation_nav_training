@@ -14,10 +14,10 @@ data_collector:
     image_topic: "/image_raw"
     odom_topic: "/odometry"
     cmd_vel_topic: "/cmd_vel"
-    image_height: 88
-    image_width: 200
+    image_height: 480
+    image_width: 640
     dataset_folder: "dataset"
     max_data_count: 1000000
-    interval_ms: 200
+    interval_ms: 100
     save_node_freq: 1 # [s]
     show_histogram: true
