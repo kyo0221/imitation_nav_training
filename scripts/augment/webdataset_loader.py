@@ -54,11 +54,15 @@ class WebDatasetLoader(Dataset):
     def _handle_sample_format(self, sample):
         """サンプル形式を処理（numpy専用）"""
         # メタデータを取得
-        if "angle.json" in sample:
-            angle_data = sample["angle.json"]
+        if "metadata.json" in sample:
+            # data_collector_node.pyの新しい形式に対応
+            metadata_data = sample["metadata.json"]
             action_data = sample["action.json"]
+            # metadataからangle情報を抽出
+            metadata_info = json.loads(metadata_data)
+            angle_data = json.dumps({"angle": metadata_info.get("angle", 0.0)})
         else:
-            raise ValueError("Missing metadata in sample")
+            raise ValueError("Missing metadata.json in sample")
         
         # numpy形式の画像データを取得
         if "npy" in sample:
@@ -66,14 +70,18 @@ class WebDatasetLoader(Dataset):
             angle_info = json.loads(angle_data)
             
             # メタデータから画像情報を取得
-            image_shape = angle_info.get('image_shape')
-            image_dtype = angle_info.get('image_dtype', 'uint8')
+            metadata_info = json.loads(metadata_data)
+            image_shape = metadata_info.get('image_shape')
+            image_dtype = metadata_info.get('image_dtype', 'uint8')
             
-            if image_shape is None:
-                raise ValueError("Missing image shape in numpy format")
-            
-            # バイト列からnumpy配列に変換
-            img_array = np.frombuffer(img_bytes, dtype=image_dtype).reshape(image_shape)
+            # 実際のnumpyデータから形状を取得（メタデータが不正確な場合に対応）
+            try:
+                img_array = np.load(BytesIO(img_bytes))
+            except Exception as e:
+                # フォールバック: メタデータの形状情報を使用
+                if image_shape is None:
+                    raise ValueError("Missing image shape in numpy format")
+                img_array = np.frombuffer(img_bytes, dtype=image_dtype).reshape(image_shape)
             
             # PIL Imageに変換（既存のコードとの互換性のため）
             from PIL import Image
@@ -160,7 +168,9 @@ class WebDatasetLoader(Dataset):
         try:
             # データセットを再作成してイテレート
             if not hasattr(self, '_samples_cache'):
+                print(f"Loading WebDataset samples into cache...")
                 self._samples_cache = list(self.dataset)
+                print(f"Successfully cached {len(self._samples_cache)} samples")
             
             samples = self._samples_cache
             if base_idx >= len(samples):
@@ -220,7 +230,10 @@ class WebDatasetLoader(Dataset):
             return img_tensor, action_onehot, angle_tensor
             
         except Exception as e:
-            print(f"Error loading sample {idx}: {e}")
+            print(f"Error loading sample {idx} (base_idx: {base_idx}): {e}")
+            print(f"Available samples: {len(self._samples_cache) if hasattr(self, '_samples_cache') else 'Not cached'}")
+            import traceback
+            traceback.print_exc()
             # エラー時のフォールバック
             dummy_img = torch.zeros(3, self.input_size[0], self.input_size[1])
             dummy_angle = torch.zeros(1)

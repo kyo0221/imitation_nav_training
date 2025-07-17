@@ -49,6 +49,13 @@ class WebDatasetAnalyzer:
         }
         
         # WebDatasetLoaderを使用してデータセットを読み込み
+        print("Initializing WebDatasetLoader...")
+        
+        # シャードファイルを確認
+        import glob
+        shard_files = glob.glob(os.path.join(self.dataset_dir, "shard_*.tar*"))
+        print(f"Found {len(shard_files)} shard files: {[os.path.basename(f) for f in shard_files]}")
+        
         self.webdataset_loader = WebDatasetLoader(
             dataset_dir=self.dataset_dir,
             input_size=(88, 200),  # デフォルトサイズ
@@ -59,6 +66,30 @@ class WebDatasetAnalyzer:
         
         print(f"Loaded WebDataset from: {self.dataset_dir}")
         print(f"Total samples: {len(self.webdataset_loader)}")
+        
+        # サンプル数の不一致を確認
+        actual_samples = len(self.webdataset_loader)
+        expected_samples = self.webdataset_loader.samples_count
+        if actual_samples != expected_samples:
+            print(f"\n⚠️  WARNING: Sample count mismatch detected!")
+            print(f"  Expected: {expected_samples} samples")
+            print(f"  Actual: {actual_samples} samples")
+            print(f"  Missing: {expected_samples - actual_samples} samples")
+            
+            # WebDatasetの直接テスト
+            try:
+                print("Testing direct WebDataset access...")
+                import webdataset as wds
+                raw_dataset = wds.WebDataset(shard_files, shardshuffle=False)
+                raw_count = 0
+                error_count = 0
+                for i, sample in enumerate(raw_dataset):
+                    raw_count += 1
+                    if i >= 20:  # 最初の20サンプルでテスト
+                        break
+                print(f"Direct WebDataset test: Successfully read {raw_count} samples")
+            except Exception as e:
+                print(f"Direct WebDataset test failed: {e}")
         
         # 統計情報ファイルを読み込み
         self._load_dataset_stats()
@@ -459,8 +490,8 @@ class WebDatasetAnalyzer:
         print(f"\nAnalysis results saved to: {self.output_dir}")
         print("="*50)
     
-    def view_images_interactive(self, sample_limit=100):
-        """画像を対話的に表示"""
+    def view_images_interactive(self):
+        """画像を対話的に表示（全画像表示）"""
         print("\n" + "="*50)
         print("INTERACTIVE IMAGE VIEWER")
         print("="*50)
@@ -470,17 +501,40 @@ class WebDatasetAnalyzer:
         print("  'q': Quit")
         print("  'a': Toggle action display")
         print("  'r': Reset to first image")
+        print("  'j': Jump to specific image (enter number)")
+        print("  'h': Show this help")
         print("="*50)
         
         # WebDatasetLoaderからサンプルを取得
+        print("Loading samples from WebDataset...")
+        
+        # 診断情報を表示
+        print(f"WebDatasetLoader reports: {len(self.webdataset_loader)} samples")
+        print(f"Raw samples count: {self.webdataset_loader.samples_count} samples")
+        print(f"Shift augmentation: {self.webdataset_loader.shift_aug}")
+        print(f"Yaw augmentation: {self.webdataset_loader.yaw_aug}")
+        
         if not hasattr(self.webdataset_loader, '_samples_cache'):
-            self.webdataset_loader._samples_cache = list(self.webdataset_loader.dataset)
+            # 全サンプルをロード
+            print("Loading all samples into cache...")
+            try:
+                self.webdataset_loader._samples_cache = list(self.webdataset_loader.dataset)
+                print(f"Successfully loaded {len(self.webdataset_loader._samples_cache)} samples into cache")
+            except Exception as e:
+                print(f"Error loading samples: {e}")
+                return
         
         samples = self.webdataset_loader._samples_cache
         total_samples = len(samples)
-        display_samples = min(sample_limit, total_samples) if sample_limit else total_samples
+        display_samples = total_samples  # 常に全サンプルを表示
         
-        print(f"Loaded {display_samples} samples for viewing")
+        print(f"\n⚠️  SAMPLE COUNT MISMATCH DETECTED:")
+        print(f"  Expected (from JSON stats): {self.webdataset_loader.samples_count}")
+        print(f"  Actually loaded: {total_samples}")
+        print(f"  Ratio: {total_samples/self.webdataset_loader.samples_count*100:.1f}%")
+        
+        print(f"\nDisplaying all {display_samples} available samples")
+        print("Samples loaded successfully!")
         
         current_idx = 0
         show_actions = True
@@ -576,9 +630,8 @@ def main():
     parser = argparse.ArgumentParser(description="Analyze WebDataset with interactive image viewer")
     parser.add_argument("dataset_dir", help="Directory containing WebDataset shard files (parent directory)")
     parser.add_argument("--output_dir", help="Output directory for analysis results")
-    parser.add_argument("--sample_limit", type=int, help="Limit number of samples to analyze")
+    parser.add_argument("--sample_limit", type=int, help="Limit number of samples to analyze (for statistical analysis only)")
     parser.add_argument("--stats_only", action="store_true", help="Only run statistical analysis (skip image viewer)")
-    parser.add_argument("--view_limit", type=int, default=100, help="Limit number of images to load for viewing")
     
     args = parser.parse_args()
     
@@ -597,8 +650,8 @@ def main():
         analyzer.analyze(sample_limit=args.sample_limit)
         analyzer.print_summary()
     else:
-        # デフォルト: 画像ビューアーを起動
-        analyzer.view_images_interactive(sample_limit=args.view_limit)
+        # デフォルト: 画像ビューアーを起動（全画像表示）
+        analyzer.view_images_interactive()
     
     return 0
 

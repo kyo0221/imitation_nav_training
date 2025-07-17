@@ -7,7 +7,7 @@ train:
   image_height: 224
   image_width: 224
   action_classes: ["roadside, straight, left, right"] # 条件付き模倣学習の制御指令
-  model_filename: resnet_sinario.pt # 出力する学習済みモデルの名前
+  model_filename: simtest_resnet_webdata.pt # 出力する学習済みモデルの名前
   augment: None # [None, gamma, augmix]
   freeze_resnet_backbone: true # ResNet事前学習済みバックボーンを凍結してMLP部分のみ学習（true 推奨）
 
