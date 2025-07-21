@@ -41,6 +41,8 @@ class Config:
         self.augment_method = config['augment']
         self.resample = config.get('resample', False)
         self.freeze_resnet_backbone = config.get('freeze_resnet_backbone', True)
+        self.shift_signs = config.get('shift_signs', [-2.0, -1.0, 0.0, 1.0, 2.0])
+        self.yaw_signs = config.get('yaw_signs', [0.0])
 
 class AugMixConfig:
     def __init__(self):
@@ -253,6 +255,8 @@ if __name__ == '__main__':
         shift_offset=5,
         vel_offset=0.2,
         n_action_classes=len(config.class_names),
+        shift_signs=config.shift_signs,
+        yaw_signs=config.yaw_signs,
         visualize_dir=None
     )
     
@@ -263,6 +267,8 @@ if __name__ == '__main__':
         shift_offset=5,
         vel_offset=0.2,
         n_action_classes=len(config.class_names),
+        shift_signs=config.shift_signs,
+        yaw_signs=config.yaw_signs,
         visualize_dir=args.visualize_dir
     )
     

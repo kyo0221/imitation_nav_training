@@ -35,7 +35,6 @@ class DataCollector(Node):
         self.declare_parameter('show_histogram', True)
         self.declare_parameter('samples_per_shard', 1000)
         self.declare_parameter('enable_compression', True)
-        self.declare_parameter('swap_rb_channels', False)
 
         self.image_topic = self.get_parameter('image_topic').get_parameter_value().string_value
         self.cmd_vel_topic = self.get_parameter('cmd_vel_topic').get_parameter_value().string_value
@@ -47,7 +46,6 @@ class DataCollector(Node):
         self.show_histogram = self.get_parameter('show_histogram').get_parameter_value().bool_value
         self.samples_per_shard = self.get_parameter('samples_per_shard').get_parameter_value().integer_value
         self.enable_compression = self.get_parameter('enable_compression').get_parameter_value().bool_value
-        self.swap_rb_channels = self.get_parameter('swap_rb_channels').get_parameter_value().bool_value
 
         self.save_log_path = os.path.join(pkg_dir, '..', 'logs')
         self.dataset_dir = os.path.join(self.save_log_path, self.log_name)
@@ -79,10 +77,6 @@ class DataCollector(Node):
         self.shard_lock = threading.Lock()  # スレッドセーフティのためのロック
         self._last_processed_image = None
         
-        # 保存エラーカウンター
-        self.save_error_count = 0
-        self.max_save_errors = 10
-        
         # シャードファイル管理
         self.completed_shards = []
         
@@ -108,18 +102,8 @@ class DataCollector(Node):
         self.get_logger().info(f"Saving webdataset to: {self.webdataset_dir}")
         self.get_logger().info(f"Samples per shard: {self.samples_per_shard}")
         self.get_logger().info(f"Compression enabled: {self.enable_compression}")
-        self.get_logger().info(f"Swap RB channels: {self.swap_rb_channels}")
         self.get_logger().info("Save format: numpy array")
         self.create_timer(self.save_node_freq, self.save_topomap_periodic)
-
-    def _swap_rb_channels(self, image):
-        """RとBチャンネルを入れ替える"""
-        if self.swap_rb_channels and len(image.shape) == 3 and image.shape[2] >= 3:
-            # BGRからRGBに変換（OpenCVのデフォルトはBGR）
-            swapped_image = image.copy()
-            swapped_image[:, :, 0], swapped_image[:, :, 2] = image[:, :, 2], image[:, :, 0]
-            return swapped_image
-        return image
 
     def _get_shard_filename(self, shard_id):
         """シャードファイル名を生成"""
@@ -204,63 +188,42 @@ class DataCollector(Node):
             self.get_logger().info("Save flag disabled, stopping data collection.")
 
     def image_callback(self, msg):
-        if not self.save_flag or self.data_count >= self.max_data_count:
-            return
+        if not self.save_flag:  return
+
+        cv_image = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+        resized = cv2.resize(cv_image, (self.img_width, self.img_height))
+
+        # 最後に処理した画像を記録（TopoMap用）
+        self._last_processed_image = resized.copy()
+
+        # WebDataset形式で保存
+        save_success = self._save_webdataset_sample(resized, self.last_ang_vel, self.action_to_index[self.command_mode], msg)
         
-        # 保存エラーが多すぎる場合は停止
-        if self.save_error_count >= self.max_save_errors:
-            self.get_logger().error(f"保存エラーが多すぎます ({self.save_error_count}). データ収集を停止します。")
-            self.save_flag = False
-            return
-
-        try:
-            cv_image = self.bridge.imgmsg_to_cv2(msg)
-            resized = cv2.resize(cv_image, (self.img_width, self.img_height))
+        if save_success:
+            self.action_counts[self.command_mode] += 1
+            self.data_count += 1
+            self.current_shard_count += 1
             
-            # RとBチャンネルを反転（パラメータに応じて）
-            processed_image = self._swap_rb_channels(resized)
-
-            # 最後に処理した画像を記録（TopoMap用）
-            self._last_processed_image = processed_image.copy()
-
-            # WebDataset形式で保存
-            save_success = self._save_webdataset_sample(processed_image, self.last_ang_vel, self.action_to_index[self.command_mode], msg)
+            # シャードが満杯になったら新しいシャードを開始
+            # WebDatasetのShardWriterが自動でシャード切り替えを行うため、カウンターのリセットのみ
+            if self.current_shard_count >= self.samples_per_shard:
+                self._close_current_shard_and_start_next()
             
-            if save_success:
-                self.action_counts[self.command_mode] += 1
-                self.data_count += 1
-                self.current_shard_count += 1
-                
-                # シャードが満杯になったら新しいシャードを開始
-                # WebDatasetのShardWriterが自動でシャード切り替えを行うため、カウンターのリセットのみ
-                if self.current_shard_count >= self.samples_per_shard:
-                    self._close_current_shard_and_start_next()
-                
-                # ヒストグラムを定期的に更新
-                if self.save_flag and self.show_histogram and self.data_count % 10 == 0:
-                    self.display_histogram()
-                
-                if self.data_count % 100 == 0:
-                    self._log_data_stats()
-                
-                if self.data_count % 10 == 0:
-                    self.get_logger().info(f"📸 Sample saved: {self.data_count:05d}")
-            else:
-                self.get_logger().warn("サンプル保存に失敗しました")
+            # ヒストグラムを定期的に更新
+            if self.save_flag and self.show_histogram and self.data_count % 10 == 0:    self.display_histogram()
+            if self.data_count % 100 == 0:  self._log_data_stats()
+            if self.data_count % 10 == 0:   self.get_logger().info(f"📸 Sample saved: {self.data_count:05d}")
+        else:
+            self.get_logger().warn("サンプル保存に失敗しました")
 
-        except Exception as e:
-            self.get_logger().error(f"[image_callback] Failed to process image: {e}")
-            self.save_error_count += 1
 
     def _save_webdataset_sample(self, image, angle, action, msg):
-        """WebDataset形式でサンプルを保存（numpy配列形式）"""
         if self.shard_writer is None:
             self.get_logger().error("ShardWriter is not initialized")
             return False
         
         try:
             with self.shard_lock:
-                # numpy配列として保存
                 img_buffer = io.BytesIO()
                 np.save(img_buffer, image)
                 img_data = img_buffer.getvalue()
@@ -276,7 +239,6 @@ class DataCollector(Node):
                     'save_format': 'numpy',
                     'image_shape': list(image.shape),
                     'image_dtype': str(image.dtype),
-                    'swap_rb_channels': self.swap_rb_channels
                 }
                 
                 # WebDatasetに書き込み
@@ -293,7 +255,6 @@ class DataCollector(Node):
                 
         except Exception as e:
             self.get_logger().error(f"WebDataset保存エラー: {e}")
-            self.save_error_count += 1
             return False
 
     def save_image_callback(self, msg: Empty):
@@ -305,13 +266,13 @@ class DataCollector(Node):
             return
 
         try:
-            dst_name = f"img{self.image_save_counter:05d}.png"
+            dst_name = f"{self.image_save_counter:05d}.png"
             dst_path = os.path.join(self.image_dir, dst_name)
             
-            # 最後に処理した画像を使用（すでにRB反転済み）
             if self._last_processed_image is not None:
                 resized_img = cv2.resize(self._last_processed_image, (85, 85))
-                cv2.imwrite(dst_path, resized_img)
+                bgr_img = cv2.cvtColor(resized_img, cv2.COLOR_RGB2BGR) # rgb to bgr
+                cv2.imwrite(dst_path, bgr_img)
                 self.map_creator.add_node(dst_name, self.command_mode)
                 self.image_save_counter += 1
                 self.get_logger().info(f"🗺️ Topomap image saved: {dst_name}")
@@ -374,7 +335,6 @@ class DataCollector(Node):
             "samples_per_shard": self.samples_per_shard,
             "compression_enabled": self.enable_compression,
             "save_format": "numpy",
-            "swap_rb_channels": self.swap_rb_channels,
             "action_distribution": dict(self.action_counts),
             "dataset_directory": self.webdataset_dir,
             "image_size": [self.img_height, self.img_width],
@@ -452,7 +412,7 @@ class DataCollector(Node):
             self.map_creator.save_map()
             self.get_logger().info("🗺️ TopoMap保存完了")
         except Exception as e:
-            self.get_logger().error(f"TopoMap保存エラー: {e}")
+            self.get_logger().error(f"TopoMap保存エラー")
         
         super().destroy_node()
 

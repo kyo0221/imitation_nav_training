@@ -1,660 +1,263 @@
 #!/usr/bin/env python3
-"""
-WebDataset解析スクリプト
-画像・角速度の分布とactionの統計を表示
-"""
 
-import os
 import argparse
 import json
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from matplotlib.animation import FuncAnimation
 import webdataset as wds
 import cv2
-from collections import defaultdict, Counter
-from tqdm import tqdm
-import glob
 import sys
-
-# WebDatasetLoaderをインポート
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from augment.webdataset_loader import WebDatasetLoader
-
+import os
+from pathlib import Path
 
 class WebDatasetAnalyzer:
-    def __init__(self, dataset_dir, output_dir=None):
-        """
-        WebDatasetを解析するクラス
+    def __init__(self, dataset_path, fps=50):
+        self.dataset_path = dataset_path
+        self.fps = fps
+        self.current_index = 0
+        self.samples = []
+        self.fig = None
+        self.ax_image = None
+        self.ax_panel = None
+        self.animation = None
         
-        Args:
-            dataset_dir: WebDatasetのシャードファイルが含まれるディレクトリ
-            output_dir: 解析結果を保存するディレクトリ
-        """
-        self.dataset_dir = dataset_dir
-        self.output_dir = output_dir or os.path.join(dataset_dir, 'analysis')
-        os.makedirs(self.output_dir, exist_ok=True)
+        # Action mapping from data_collector_node.py
+        self.action_names = ["roadside", "straight", "left", "right"]
+        self.action_colors = ["orange", "green", "blue", "red"]
         
-        # 統計情報を格納する辞書
-        self.stats = {
-            'total_samples': 0,
-            'actions': defaultdict(int),
-            'angles': [],
-            'image_stats': {
-                'mean_rgb': [],
-                'std_rgb': [],
-                'brightness': [],
-                'contrast': []
-            },
-            'metadata': {}
-        }
+        # Load dataset
+        self._load_dataset()
         
-        # WebDatasetLoaderを使用してデータセットを読み込み
-        print("Initializing WebDatasetLoader...")
+        # Setup visualization
+        self._setup_visualization()
+    
+    def _load_dataset(self):
+        """Load webdataset samples into memory for random access"""
+        print(f"Loading dataset from: {self.dataset_path}")
         
-        # シャードファイルを確認
-        import glob
-        shard_files = glob.glob(os.path.join(self.dataset_dir, "shard_*.tar*"))
-        print(f"Found {len(shard_files)} shard files: {[os.path.basename(f) for f in shard_files]}")
+        # Find shard files
+        dataset_dir = Path(self.dataset_path)
+        if not dataset_dir.exists():
+            raise FileNotFoundError(f"Dataset directory not found: {self.dataset_path}")
         
-        self.webdataset_loader = WebDatasetLoader(
-            dataset_dir=self.dataset_dir,
-            input_size=(88, 200),  # デフォルトサイズ
-            shift_aug=False,       # 拡張なし
-            yaw_aug=False,         # 拡張なし
-            n_action_classes=4
-        )
+        webdataset_dir = dataset_dir / "webdataset"
+        if not webdataset_dir.exists():
+            raise FileNotFoundError(f"Webdataset directory not found: {webdataset_dir}")
         
-        print(f"Loaded WebDataset from: {self.dataset_dir}")
-        print(f"Total samples: {len(self.webdataset_loader)}")
+        shard_files = list(webdataset_dir.glob("shard_*.tar*"))
+        if not shard_files:
+            raise FileNotFoundError(f"No shard files found in: {webdataset_dir}")
         
-        # サンプル数の不一致を確認
-        actual_samples = len(self.webdataset_loader)
-        expected_samples = self.webdataset_loader.samples_count
-        if actual_samples != expected_samples:
-            print(f"\n⚠️  WARNING: Sample count mismatch detected!")
-            print(f"  Expected: {expected_samples} samples")
-            print(f"  Actual: {actual_samples} samples")
-            print(f"  Missing: {expected_samples - actual_samples} samples")
-            
-            # WebDatasetの直接テスト
+        print(f"Found {len(shard_files)} shard files")
+        
+        # Create webdataset loader
+        urls = [str(f) for f in sorted(shard_files)]
+        dataset = wds.WebDataset(urls).decode()
+        
+        # Load all samples
+        print("Loading samples...")
+        for i, sample in enumerate(dataset):
             try:
-                print("Testing direct WebDataset access...")
-                import webdataset as wds
-                raw_dataset = wds.WebDataset(shard_files, shardshuffle=False)
-                raw_count = 0
-                error_count = 0
-                for i, sample in enumerate(raw_dataset):
-                    raw_count += 1
-                    if i >= 20:  # 最初の20サンプルでテスト
-                        break
-                print(f"Direct WebDataset test: Successfully read {raw_count} samples")
-            except Exception as e:
-                print(f"Direct WebDataset test failed: {e}")
-        
-        # 統計情報ファイルを読み込み
-        self._load_dataset_stats()
-    
-    
-    def _load_dataset_stats(self):
-        """dataset_stats.jsonを読み込み"""
-        stats_file = os.path.join(self.dataset_dir, "dataset_stats.json")
-        if os.path.exists(stats_file):
-            with open(stats_file, 'r') as f:
-                self.stats['metadata'] = json.load(f)
-                print(f"Loaded dataset stats: {self.stats['metadata']}")
-        else:
-            print("dataset_stats.json not found")
-    
-    def _process_image_array(self, img_array):
-        """画像配列を処理して統計を計算"""
-        # 画像統計を計算
-        if len(img_array.shape) == 3 and img_array.shape[2] == 3:
-            # BGRからRGBに変換
-            img_rgb = cv2.cvtColor(img_array, cv2.COLOR_BGR2RGB)
-            
-            # 平均と標準偏差を計算
-            mean_rgb = np.mean(img_rgb, axis=(0, 1))
-            std_rgb = np.std(img_rgb, axis=(0, 1))
-            
-            # 明度を計算（グレースケール変換）
-            gray = cv2.cvtColor(img_array, cv2.COLOR_BGR2GRAY)
-            brightness = np.mean(gray)
-            contrast = np.std(gray)
-            
-            return {
-                'mean_rgb': mean_rgb,
-                'std_rgb': std_rgb,
-                'brightness': brightness,
-                'contrast': contrast
-            }
-        
-        return None
-    
-    def analyze(self, sample_limit=None):
-        """WebDatasetを解析"""
-        print(f"Analyzing WebDataset in {self.dataset_dir}")
-        
-        # WebDatasetLoaderからサンプルを取得
-        total_samples = len(self.webdataset_loader)
-        analyze_count = sample_limit if sample_limit and sample_limit < total_samples else total_samples
-        
-        # 内部キャッシュを使用してサンプルを取得
-        if not hasattr(self.webdataset_loader, '_samples_cache'):
-            self.webdataset_loader._samples_cache = list(self.webdataset_loader.dataset)
-        
-        samples = self.webdataset_loader._samples_cache[:analyze_count]
-        
-        sample_count = 0
-        for sample_data in tqdm(samples, desc="Analyzing samples"):
-            try:
-                # サンプルデータを取得
-                img_data, angle_data, action_data = sample_data
+                # Extract image (already numpy array in RGB format)
+                image = sample["npy"]
+                if isinstance(image, bytes):
+                    image = np.frombuffer(image, dtype=np.uint8)
+                # Image is already in RGB format from data_collector_node.py
                 
-                # JSONデータを解析
-                angle_info = json.loads(angle_data)
-                action_info = json.loads(action_data)
+                # Extract metadata (already decoded by webdataset)
+                metadata = sample["metadata.json"]
+                if isinstance(metadata, str):
+                    metadata = json.loads(metadata)
+                angle = metadata["angle"]
+                action = metadata["action"]
                 
-                # 角速度を記録
-                angle = angle_info.get('angle', 0.0)
-                self.stats['angles'].append(angle)
+                self.samples.append({
+                    "image": image,
+                    "angle": angle,
+                    "action": action,
+                    "key": sample["__key__"]
+                })
                 
-                # アクションを記録
-                action = action_info.get('action', 0)
-                self.stats['actions'][action] += 1
-                
-                # 画像データを処理（PIL Imageから変換）
-                if hasattr(img_data, 'mode'):  # PIL Image
-                    img_array = np.array(img_data)
-                    if len(img_array.shape) == 3:
-                        # RGBからBGRに変換してOpenCVと統一
-                        img_array = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+                if (i + 1) % 100 == 0:
+                    print(f"Loaded {i + 1} samples...")
                     
-                    img_stats = self._process_image_array(img_array)
-                    if img_stats:
-                        self.stats['image_stats']['mean_rgb'].append(img_stats['mean_rgb'])
-                        self.stats['image_stats']['std_rgb'].append(img_stats['std_rgb'])
-                        self.stats['image_stats']['brightness'].append(img_stats['brightness'])
-                        self.stats['image_stats']['contrast'].append(img_stats['contrast'])
-                
-                sample_count += 1
-                
             except Exception as e:
-                print(f"Error processing sample {sample_count}: {e}")
+                print(f"Error loading sample {i}: {e}")
                 continue
         
-        self.stats['total_samples'] = sample_count
-        print(f"Analyzed {sample_count} samples")
+        print(f"Loaded {len(self.samples)} samples total")
         
-        # 統計を計算
-        self._calculate_statistics()
-        
-        # 結果を保存
-        self._save_results()
-        
-        # 可視化
-        self._create_visualizations()
+        if not self.samples:
+            raise ValueError("No valid samples found in dataset")
     
-    def _calculate_statistics(self):
-        """統計情報を計算"""
-        # 角速度の統計
-        if self.stats['angles']:
-            angles = np.array(self.stats['angles'])
-            self.stats['angle_stats'] = {
-                'mean': float(np.mean(angles)),
-                'std': float(np.std(angles)),
-                'min': float(np.min(angles)),
-                'max': float(np.max(angles)),
-                'median': float(np.median(angles))
-            }
+    def _setup_visualization(self):
+        """Setup matplotlib figure and axes"""
+        self.fig = plt.figure(figsize=(12, 6))
         
-        # 画像統計の平均
-        if self.stats['image_stats']['mean_rgb']:
-            mean_rgb = np.array(self.stats['image_stats']['mean_rgb'])
-            self.stats['image_summary'] = {
-                'mean_rgb_overall': np.mean(mean_rgb, axis=0).tolist(),
-                'mean_brightness': float(np.mean(self.stats['image_stats']['brightness'])),
-                'mean_contrast': float(np.mean(self.stats['image_stats']['contrast']))
-            }
+        # Image display area (left side)
+        self.ax_image = plt.subplot2grid((2, 3), (0, 0), colspan=2, rowspan=2)
+        self.ax_image.set_title("Camera Image")
+        self.ax_image.axis('off')
+        
+        # Action panel area (right side)
+        self.ax_panel = plt.subplot2grid((2, 3), (0, 2), rowspan=2)
+        self.ax_panel.set_title("Action & Angle")
+        self.ax_panel.set_xlim(0, 2)
+        self.ax_panel.set_ylim(0, 5)
+        self.ax_panel.axis('off')
+        
+        # Setup keyboard event handling
+        self.fig.canvas.mpl_connect('key_press_event', self._on_key_press)
+        
+        # Initial display
+        self._update_display()
+        
+        # Setup animation for auto-advance
+        self.animation = FuncAnimation(
+            self.fig, 
+            self._animate, 
+            interval=1000//self.fps,  # 50Hz = 20ms
+            blit=False
+        )
     
-    def _save_results(self):
-        """解析結果をJSONファイルに保存"""
-        # NumPy配列をリストに変換
-        results = {
-            'total_samples': self.stats['total_samples'],
-            'actions': dict(self.stats['actions']),
-            'angle_stats': self.stats.get('angle_stats', {}),
-            'image_summary': self.stats.get('image_summary', {}),
-            'metadata': self.stats['metadata']
-        }
-        
-        output_file = os.path.join(self.output_dir, 'analysis_results.json')
-        with open(output_file, 'w') as f:
-            json.dump(results, f, indent=2)
-        
-        print(f"Analysis results saved to: {output_file}")
-    
-    def _create_visualizations(self):
-        """可視化を作成"""
-        # 1. アクション分布のヒストグラム
-        self._plot_action_distribution()
-        
-        # 2. 角速度分布のヒストグラム
-        self._plot_angle_distribution()
-        
-        # 3. 画像統計の分布
-        self._plot_image_statistics()
-        
-        # 4. 統計サマリー
-        self._create_summary_plot()
-    
-    def _plot_action_distribution(self):
-        """アクション分布をプロット"""
-        if not self.stats['actions']:
+    def _update_display(self):
+        """Update the visualization with current sample"""
+        if not self.samples:
             return
         
-        plt.figure(figsize=(10, 6))
+        # Clamp index to valid range
+        self.current_index = max(0, min(self.current_index, len(self.samples) - 1))
         
-        actions = list(self.stats['actions'].keys())
-        counts = list(self.stats['actions'].values())
+        sample = self.samples[self.current_index]
         
-        # アクションラベルのマッピング
-        action_labels = {0: 'roadside', 1: 'straight', 2: 'left', 3: 'right'}
-        labels = [action_labels.get(action, f'action_{action}') for action in actions]
+        # Update image
+        self.ax_image.clear()
+        self.ax_image.imshow(sample["image"])
+        self.ax_image.set_title(f"Image {self.current_index + 1}/{len(self.samples)} (Key: {sample['key']})")
+        self.ax_image.axis('off')
         
-        bars = plt.bar(labels, counts, color=['orange', 'blue', 'green', 'red'])
-        plt.title(f'Action Distribution (Total: {sum(counts)})')
-        plt.xlabel('Action Type')
-        plt.ylabel('Count')
-        plt.xticks(rotation=45)
+        # Update action panel
+        self.ax_panel.clear()
+        self.ax_panel.set_xlim(0, 2)
+        self.ax_panel.set_ylim(0, 5)
+        self.ax_panel.axis('off')
+        self.ax_panel.set_title("Action & Angle")
         
-        # 各バーの上に数値を表示
-        for bar, count in zip(bars, counts):
-            plt.text(bar.get_x() + bar.get_width()/2., bar.get_height() + 0.5,
-                    f'{count}', ha='center', va='bottom')
+        # Draw action buttons
+        button_positions = [
+            (0.1, 4.0, "roadside"),    # top-left
+            (1.1, 4.0, "straight"),    # top-right  
+            (0.1, 3.0, "left"),        # bottom-left
+            (1.1, 3.0, "right")        # bottom-right
+        ]
         
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.output_dir, 'action_distribution.png'), dpi=300)
-        plt.close()
+        for i, (x, y, name) in enumerate(button_positions):
+            # Determine if this action is active
+            is_active = (sample["action"] == i)
+            color = self.action_colors[i] if is_active else 'lightgray'
+            alpha = 1.0 if is_active else 0.3
+            
+            # Draw button rectangle
+            rect = patches.Rectangle(
+                (x, y), 0.8, 0.6, 
+                linewidth=2, 
+                edgecolor='black', 
+                facecolor=color, 
+                alpha=alpha
+            )
+            self.ax_panel.add_patch(rect)
+            
+            # Add text
+            text_color = 'white' if is_active else 'black'
+            self.ax_panel.text(
+                x + 0.4, y + 0.3, name, 
+                ha='center', va='center', 
+                fontsize=8, fontweight='bold', 
+                color=text_color
+            )
+        
+        # Display angle value
+        self.ax_panel.text(
+            1.0, 2.0, f"Angle: {sample['angle']:.3f} rad/s", 
+            ha='center', va='center', 
+            fontsize=12, fontweight='bold',
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="lightblue")
+        )
+        
+        # Display navigation help
+        self.ax_panel.text(
+            1.0, 0.8, "Controls:\n← : Back 50\n→ : Forward 100\nSpace: Pause/Resume", 
+            ha='center', va='center', 
+            fontsize=8,
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="lightyellow")
+        )
     
-    def _plot_angle_distribution(self):
-        """角速度分布をプロット"""
-        if not self.stats['angles']:
+    def _animate(self, frame):
+        """Animation function for auto-advance"""
+        if hasattr(self, '_paused') and self._paused:
             return
-        
-        plt.figure(figsize=(12, 8))
-        
-        angles = np.array(self.stats['angles'])
-        
-        # ヒストグラム
-        plt.subplot(2, 2, 1)
-        plt.hist(angles, bins=50, alpha=0.7, color='skyblue', edgecolor='black')
-        plt.title('Angular Velocity Distribution')
-        plt.xlabel('Angular Velocity (rad/s)')
-        plt.ylabel('Frequency')
-        
-        # 累積分布
-        plt.subplot(2, 2, 2)
-        sorted_angles = np.sort(angles)
-        y = np.arange(len(sorted_angles)) / len(sorted_angles)
-        plt.plot(sorted_angles, y, linewidth=2)
-        plt.title('Cumulative Distribution')
-        plt.xlabel('Angular Velocity (rad/s)')
-        plt.ylabel('Cumulative Probability')
-        
-        # ボックスプロット
-        plt.subplot(2, 2, 3)
-        plt.boxplot(angles, vert=True)
-        plt.title('Angular Velocity Box Plot')
-        plt.ylabel('Angular Velocity (rad/s)')
-        
-        # 統計情報テキスト
-        plt.subplot(2, 2, 4)
-        plt.axis('off')
-        stats_text = f"""
-        Mean: {self.stats['angle_stats']['mean']:.4f}
-        Std: {self.stats['angle_stats']['std']:.4f}
-        Min: {self.stats['angle_stats']['min']:.4f}
-        Max: {self.stats['angle_stats']['max']:.4f}
-        Median: {self.stats['angle_stats']['median']:.4f}
-        """
-        plt.text(0.1, 0.5, stats_text, fontsize=12, verticalalignment='center')
-        
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.output_dir, 'angle_distribution.png'), dpi=300)
-        plt.close()
+            
+        self.current_index = (self.current_index + 1) % len(self.samples)
+        self._update_display()
     
-    def _plot_image_statistics(self):
-        """画像統計をプロット"""
-        if not self.stats['image_stats']['brightness']:
-            return
-        
-        plt.figure(figsize=(15, 10))
-        
-        # 明度分布
-        plt.subplot(2, 3, 1)
-        plt.hist(self.stats['image_stats']['brightness'], bins=30, alpha=0.7, color='yellow', edgecolor='black')
-        plt.title('Brightness Distribution')
-        plt.xlabel('Brightness')
-        plt.ylabel('Frequency')
-        
-        # コントラスト分布
-        plt.subplot(2, 3, 2)
-        plt.hist(self.stats['image_stats']['contrast'], bins=30, alpha=0.7, color='purple', edgecolor='black')
-        plt.title('Contrast Distribution')
-        plt.xlabel('Contrast')
-        plt.ylabel('Frequency')
-        
-        # RGB平均値分布
-        if self.stats['image_stats']['mean_rgb']:
-            mean_rgb = np.array(self.stats['image_stats']['mean_rgb'])
+    def _on_key_press(self, event):
+        """Handle keyboard events"""
+        if event.key == 'left':
+            # Go back 50 images
+            self.current_index = max(0, self.current_index - 50)
+            self._update_display()
+            print(f"Moved to index: {self.current_index}")
             
-            plt.subplot(2, 3, 3)
-            plt.hist(mean_rgb[:, 0], bins=30, alpha=0.7, color='red', label='Red', edgecolor='black')
-            plt.hist(mean_rgb[:, 1], bins=30, alpha=0.7, color='green', label='Green', edgecolor='black')
-            plt.hist(mean_rgb[:, 2], bins=30, alpha=0.7, color='blue', label='Blue', edgecolor='black')
-            plt.title('RGB Mean Value Distribution')
-            plt.xlabel('Mean Value')
-            plt.ylabel('Frequency')
-            plt.legend()
+        elif event.key == 'right':
+            # Go forward 100 images
+            self.current_index = min(len(self.samples) - 1, self.current_index + 100)
+            self._update_display()
+            print(f"Moved to index: {self.current_index}")
             
-            # RGB標準偏差分布
-            std_rgb = np.array(self.stats['image_stats']['std_rgb'])
+        elif event.key == ' ':
+            # Toggle pause/resume
+            if hasattr(self, '_paused'):
+                self._paused = not self._paused
+            else:
+                self._paused = True
+            print(f"Animation {'paused' if self._paused else 'resumed'}")
             
-            plt.subplot(2, 3, 4)
-            plt.hist(std_rgb[:, 0], bins=30, alpha=0.7, color='red', label='Red', edgecolor='black')
-            plt.hist(std_rgb[:, 1], bins=30, alpha=0.7, color='green', label='Green', edgecolor='black')
-            plt.hist(std_rgb[:, 2], bins=30, alpha=0.7, color='blue', label='Blue', edgecolor='black')
-            plt.title('RGB Standard Deviation Distribution')
-            plt.xlabel('Standard Deviation')
-            plt.ylabel('Frequency')
-            plt.legend()
-        
-        # 明度 vs コントラスト散布図
-        plt.subplot(2, 3, 5)
-        plt.scatter(self.stats['image_stats']['brightness'], self.stats['image_stats']['contrast'], 
-                   alpha=0.5, s=1)
-        plt.title('Brightness vs Contrast')
-        plt.xlabel('Brightness')
-        plt.ylabel('Contrast')
-        
-        # 画像統計サマリー
-        plt.subplot(2, 3, 6)
-        plt.axis('off')
-        summary_text = f"""
-        Image Statistics Summary:
-        
-        Brightness:
-        Mean: {np.mean(self.stats['image_stats']['brightness']):.2f}
-        Std: {np.std(self.stats['image_stats']['brightness']):.2f}
-        
-        Contrast:
-        Mean: {np.mean(self.stats['image_stats']['contrast']):.2f}
-        Std: {np.std(self.stats['image_stats']['contrast']):.2f}
-        
-        RGB Mean (overall):
-        R: {self.stats['image_summary']['mean_rgb_overall'][0]:.2f}
-        G: {self.stats['image_summary']['mean_rgb_overall'][1]:.2f}
-        B: {self.stats['image_summary']['mean_rgb_overall'][2]:.2f}
-        """
-        plt.text(0.05, 0.95, summary_text, fontsize=10, verticalalignment='top')
-        
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.output_dir, 'image_statistics.png'), dpi=300)
-        plt.close()
-    
-    def _create_summary_plot(self):
-        """統計サマリーを作成"""
-        plt.figure(figsize=(16, 10))
-        
-        # 全体のサマリー情報
-        plt.subplot(2, 2, 1)
-        plt.axis('off')
-        summary_text = f"""
-        Dataset Analysis Summary
-        
-        Total Samples: {self.stats['total_samples']}
-        
-        Actions:
-        {chr(10).join([f"  {k}: {v}" for k, v in self.stats['actions'].items()])}
-        
-        Angular Velocity:
-        Mean: {self.stats.get('angle_stats', {}).get('mean', 0):.4f}
-        Std: {self.stats.get('angle_stats', {}).get('std', 0):.4f}
-        Range: [{self.stats.get('angle_stats', {}).get('min', 0):.4f}, {self.stats.get('angle_stats', {}).get('max', 0):.4f}]
-        
-        Dataset Info:
-        {chr(10).join([f"  {k}: {v}" for k, v in self.stats['metadata'].items() if k != 'input_directory'])}
-        """
-        plt.text(0.05, 0.95, summary_text, fontsize=12, verticalalignment='top')
-        
-        # アクション分布（円グラフ）
-        plt.subplot(2, 2, 2)
-        if self.stats['actions']:
-            action_labels = {0: 'roadside', 1: 'straight', 2: 'left', 3: 'right'}
-            labels = [action_labels.get(action, f'action_{action}') for action in self.stats['actions'].keys()]
-            sizes = list(self.stats['actions'].values())
-            colors = ['orange', 'blue', 'green', 'red']
-            
-            plt.pie(sizes, labels=labels, colors=colors[:len(sizes)], autopct='%1.1f%%', startangle=90)
-            plt.title('Action Distribution')
-        
-        # 角速度分布（簡略版）
-        plt.subplot(2, 2, 3)
-        if self.stats['angles']:
-            angles = np.array(self.stats['angles'])
-            plt.hist(angles, bins=30, alpha=0.7, color='skyblue', edgecolor='black')
-            plt.title('Angular Velocity Distribution')
-            plt.xlabel('Angular Velocity (rad/s)')
-            plt.ylabel('Frequency')
-        
-        # 明度分布（簡略版）
-        plt.subplot(2, 2, 4)
-        if self.stats['image_stats']['brightness']:
-            plt.hist(self.stats['image_stats']['brightness'], bins=30, alpha=0.7, color='yellow', edgecolor='black')
-            plt.title('Image Brightness Distribution')
-            plt.xlabel('Brightness')
-            plt.ylabel('Frequency')
-        
-        plt.tight_layout()
-        plt.savefig(os.path.join(self.output_dir, 'dataset_summary.png'), dpi=300)
-        plt.close()
-    
-    def print_summary(self):
-        """解析結果の要約を表示"""
-        print("\n" + "="*50)
-        print("WEBDATASET ANALYSIS SUMMARY")
-        print("="*50)
-        
-        print(f"Total Samples: {self.stats['total_samples']}")
-        
-        print("\nAction Distribution:")
-        action_labels = {0: 'roadside', 1: 'straight', 2: 'left', 3: 'right'}
-        for action, count in self.stats['actions'].items():
-            label = action_labels.get(action, f'action_{action}')
-            percentage = (count / self.stats['total_samples']) * 100 if self.stats['total_samples'] > 0 else 0
-            print(f"  {label}: {count} ({percentage:.1f}%)")
-        
-        if 'angle_stats' in self.stats:
-            print("\nAngular Velocity Statistics:")
-            print(f"  Mean: {self.stats['angle_stats']['mean']:.4f} rad/s")
-            print(f"  Std: {self.stats['angle_stats']['std']:.4f} rad/s")
-            print(f"  Range: [{self.stats['angle_stats']['min']:.4f}, {self.stats['angle_stats']['max']:.4f}] rad/s")
-        
-        if 'image_summary' in self.stats:
-            print("\nImage Statistics:")
-            print(f"  Mean brightness: {self.stats['image_summary']['mean_brightness']:.2f}")
-            print(f"  Mean contrast: {self.stats['image_summary']['mean_contrast']:.2f}")
-            rgb = self.stats['image_summary']['mean_rgb_overall']
-            print(f"  RGB means: R={rgb[0]:.2f}, G={rgb[1]:.2f}, B={rgb[2]:.2f}")
-        
-        print(f"\nAnalysis results saved to: {self.output_dir}")
-        print("="*50)
-    
-    def view_images_interactive(self):
-        """画像を対話的に表示（全画像表示）"""
-        print("\n" + "="*50)
-        print("INTERACTIVE IMAGE VIEWER")
-        print("="*50)
-        print("Controls:")
-        print("  → (Right Arrow): Next image")
-        print("  ← (Left Arrow): Previous image")
-        print("  'q': Quit")
-        print("  'a': Toggle action display")
-        print("  'r': Reset to first image")
-        print("  'j': Jump to specific image (enter number)")
-        print("  'h': Show this help")
-        print("="*50)
-        
-        # WebDatasetLoaderからサンプルを取得
-        print("Loading samples from WebDataset...")
-        
-        # 診断情報を表示
-        print(f"WebDatasetLoader reports: {len(self.webdataset_loader)} samples")
-        print(f"Raw samples count: {self.webdataset_loader.samples_count} samples")
-        print(f"Shift augmentation: {self.webdataset_loader.shift_aug}")
-        print(f"Yaw augmentation: {self.webdataset_loader.yaw_aug}")
-        
-        if not hasattr(self.webdataset_loader, '_samples_cache'):
-            # 全サンプルをロード
-            print("Loading all samples into cache...")
-            try:
-                self.webdataset_loader._samples_cache = list(self.webdataset_loader.dataset)
-                print(f"Successfully loaded {len(self.webdataset_loader._samples_cache)} samples into cache")
-            except Exception as e:
-                print(f"Error loading samples: {e}")
-                return
-        
-        samples = self.webdataset_loader._samples_cache
-        total_samples = len(samples)
-        display_samples = total_samples  # 常に全サンプルを表示
-        
-        print(f"\n⚠️  SAMPLE COUNT MISMATCH DETECTED:")
-        print(f"  Expected (from JSON stats): {self.webdataset_loader.samples_count}")
-        print(f"  Actually loaded: {total_samples}")
-        print(f"  Ratio: {total_samples/self.webdataset_loader.samples_count*100:.1f}%")
-        
-        print(f"\nDisplaying all {display_samples} available samples")
-        print("Samples loaded successfully!")
-        
-        current_idx = 0
-        show_actions = True
-        
-        # matplotlib設定
-        plt.ion()
-        fig, ax = plt.subplots(figsize=(10, 8))
-        
-        def update_display():
-            """現在の画像を表示"""
-            if current_idx >= display_samples:
-                return
-            
-            try:
-                # サンプルデータを取得
-                img_data, angle_data, action_data = samples[current_idx]
-                
-                # JSONデータを解析
-                angle_info = json.loads(angle_data)
-                action_info = json.loads(action_data)
-                
-                # 画像データを処理
-                if hasattr(img_data, 'mode'):  # PIL Image
-                    img_array = np.array(img_data)
-                    # PIL ImageはRGBなのでそのまま表示
-                    display_img = img_array
-                else:
-                    display_img = img_data
-                
-                # 画像を表示
-                ax.clear()
-                ax.imshow(display_img)
-                ax.axis('off')
-                
-                # タイトルを設定
-                angle = angle_info.get('angle', 0.0)
-                action = action_info.get('action', 0)
-                action_labels = {0: 'roadside', 1: 'straight', 2: 'left', 3: 'right'}
-                action_label = action_labels.get(action, f'action_{action}')
-                
-                if show_actions:
-                    title = f"Sample {current_idx + 1}/{display_samples} | Angle: {angle:.4f} | Action: {action_label}"
-                else:
-                    title = f"Sample {current_idx + 1}/{display_samples} | Angle: {angle:.4f}"
-                
-                ax.set_title(title, fontsize=12, pad=20)
-                
-                # 画面を更新
-                fig.canvas.draw()
-                fig.canvas.flush_events()
-                
-            except Exception as e:
-                print(f"Error displaying sample {current_idx}: {e}")
-        
-        def on_key_press(event):
-            """キー入力イベントを処理"""
-            nonlocal current_idx, show_actions
-            
-            if event.key == 'right':  # 次の画像
-                current_idx = min(current_idx + 1, display_samples - 1)
-                update_display()
-            elif event.key == 'left':  # 前の画像
-                current_idx = max(current_idx - 1, 0)
-                update_display()
-            elif event.key == 'q':  # 終了
-                plt.close(fig)
-                return
-            elif event.key == 'a':  # アクション表示切り替え
-                show_actions = not show_actions
-                update_display()
-            elif event.key == 'r':  # 最初に戻る
-                current_idx = 0
-                update_display()
-        
-        # キー入力イベントを設定
-        fig.canvas.mpl_connect('key_press_event', on_key_press)
-        
-        # 最初の画像を表示
-        update_display()
-        
-        print("\nImage viewer started. Use arrow keys to navigate.")
-        
-        # イベントループ
-        try:
-            plt.show(block=True)
-        except KeyboardInterrupt:
-            print("\nViewer closed by user.")
-        finally:
+        elif event.key == 'q' or event.key == 'escape':
+            # Quit
             plt.close('all')
-
+            sys.exit(0)
+    
+    def show(self):
+        """Display the visualization"""
+        print("\nWebDataset Analyzer")
+        print("Controls:")
+        print("  ← : Go back 50 images")
+        print("  → : Go forward 100 images") 
+        print("  Space : Pause/Resume auto-advance")
+        print("  Q/Esc : Quit")
+        print(f"\nDisplaying {len(self.samples)} samples at {self.fps} Hz")
+        
+        plt.tight_layout()
+        plt.show()
 
 def main():
-    parser = argparse.ArgumentParser(description="Analyze WebDataset with interactive image viewer")
-    parser.add_argument("dataset_dir", help="Directory containing WebDataset shard files (parent directory)")
-    parser.add_argument("--output_dir", help="Output directory for analysis results")
-    parser.add_argument("--sample_limit", type=int, help="Limit number of samples to analyze (for statistical analysis only)")
-    parser.add_argument("--stats_only", action="store_true", help="Only run statistical analysis (skip image viewer)")
+    parser = argparse.ArgumentParser(description="Analyze and visualize webdataset data")
+    parser.add_argument("dataset_path", help="Path to dataset directory containing webdataset folder")
+    parser.add_argument("--fps", type=int, default=50, help="Display refresh rate (default: 50 Hz)")
     
     args = parser.parse_args()
     
-    # train.pyと同じ方式でWebDatasetディレクトリを構築
-    webdataset_dir = os.path.join(args.dataset_dir, 'webdataset')
-    if not os.path.exists(webdataset_dir):
-        print(f"Error: WebDataset directory {webdataset_dir} does not exist")
-        print(f"Expected structure: {args.dataset_dir}/webdataset/")
-        return 1
-    
-    # 解析を実行
-    analyzer = WebDatasetAnalyzer(webdataset_dir, args.output_dir)
-    
-    if args.stats_only:
-        # 統計解析のみを実行
-        analyzer.analyze(sample_limit=args.sample_limit)
-        analyzer.print_summary()
-    else:
-        # デフォルト: 画像ビューアーを起動（全画像表示）
-        analyzer.view_images_interactive()
-    
-    return 0
-
+    try:
+        analyzer = WebDatasetAnalyzer(args.dataset_path, args.fps)
+        analyzer.show()
+    except KeyboardInterrupt:
+        print("\nInterrupted by user")
+        sys.exit(0)
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
-    exit(main())
+    main()
