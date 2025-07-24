@@ -10,6 +10,7 @@ train:
   model_filename: resnet_tsudanuma_challenge.pt # 出力する学習済みモデルの名前
   augment: gamma # [None, gamma, augmix]
   freeze_resnet_backbone: false # ResNet事前学習済みバックボーンを凍結してMLP部分のみ学習（true 推奨）
+  use_pretrained_resnet: true   # ResNet事前学習済み重みを使用（false で0から学習）
   
   # WebDataset拡張用パラメータ
   shift_signs: [-2.0, -1.0, 0.0, 1.0, 2.0]  # シフト拡張の係数リスト

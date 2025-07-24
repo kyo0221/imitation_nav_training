@@ -41,6 +41,7 @@ class Config:
         self.augment_method = config['augment']
         self.resample = config.get('resample', False)
         self.freeze_resnet_backbone = config.get('freeze_resnet_backbone', True)
+        self.use_pretrained_resnet = config.get('use_pretrained_resnet', True)
         self.shift_signs = config.get('shift_signs', [-2.0, -1.0, 0.0, 1.0, 2.0])
         self.yaw_signs = config.get('yaw_signs', [0.0])
 
@@ -89,25 +90,33 @@ class AlbumentationsConfig:
 
 
 class ConditionalAnglePredictor(nn.Module):
-    def __init__(self, n_channel, n_out, input_height, input_width, n_action_classes, freeze_resnet_backbone=True):
+    def __init__(self, n_channel, n_out, input_height, input_width, n_action_classes, freeze_resnet_backbone=True, use_pretrained_resnet=True):
         super(ConditionalAnglePredictor, self).__init__()
         self.relu = nn.ReLU(inplace=True)
         self.flatten = nn.Flatten()
         self.dropout_fc = nn.Dropout(p=0.5)
 
         # ResNet18 backbone
-        resnet18 = models.resnet18(pretrained=True)
+        resnet18 = models.resnet18(pretrained=use_pretrained_resnet)
         if n_channel != 3:
             resnet18.conv1 = nn.Conv2d(n_channel, 64, kernel_size=7, stride=2, padding=3, bias=False)
         
         # 最後の全結合層とAvgPoolを削除してバックボーンを取得
         self.resnet_backbone = nn.Sequential(*list(resnet18.children())[:-2])
 
+        # Display ResNet initialization mode
+        if use_pretrained_resnet:
+            print("📦 Using pretrained ResNet18 weights from ImageNet")
+        else:
+            print("🌱 Initializing ResNet18 from scratch (no pretrained weights)")
+        
         # Freeze ResNet backbone if specified
         if freeze_resnet_backbone:
             for param in self.resnet_backbone.parameters():
                 param.requires_grad = False
             print("🔒 ResNet backbone parameters frozen. Only MLP layers will be trained.")
+        else:
+            print("🔓 ResNet backbone parameters trainable. Full model will be trained.")
         
         # ResNet18の出力次元を計算
         with torch.no_grad():
@@ -165,7 +174,7 @@ class Training:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.loader = DataLoader(dataset, batch_size=config.batch_size, num_workers=os.cpu_count() // 20, pin_memory=True, shuffle=config.shuffle)
-        self.model = ConditionalAnglePredictor(3, 1, config.image_height, config.image_width, len(config.class_names), config.freeze_resnet_backbone).to(self.device)
+        self.model = ConditionalAnglePredictor(3, 1, config.image_height, config.image_width, len(config.class_names), config.freeze_resnet_backbone, config.use_pretrained_resnet).to(self.device)
         self.criterion = nn.MSELoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=config.learning_rate)
         self.writer = SummaryWriter(log_dir=config.result_dir)
