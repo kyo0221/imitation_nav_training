@@ -11,24 +11,9 @@ from PIL import Image
 
 
 class WebDatasetLoader(Dataset):
-    def __init__(self, dataset_dir, input_size=(88, 200), shift_aug=True, yaw_aug=True, 
+    def __init__(self, dataset_dir, input_size=(224, 224), shift_aug=True, yaw_aug=False, 
                  shift_offset=5, vel_offset=0.2, n_action_classes=4, 
                  shift_signs=None, yaw_signs=None, visualize_dir=None):
-        """
-        WebDataset形式のデータを読み込むデータセットクラス
-        
-        Args:
-            dataset_dir: WebDatasetファイルがあるディレクトリパス
-            input_size: 入力画像サイズ (height, width)
-            shift_aug: シフト拡張を行うかどうか
-            yaw_aug: Yaw拡張を行うかどうか
-            shift_offset: シフト拡張のオフセット
-            vel_offset: 速度オフセット
-            n_action_classes: アクション数
-            shift_signs: シフト拡張の係数リスト（デフォルト: [-2.0, -1.0, 0.0, 1.0, 2.0]）
-            yaw_signs: Yaw拡張の角度リスト（デフォルト: [0.0]）
-            visualize_dir: 可視化用保存ディレクトリ
-        """
         self.dataset_dir = dataset_dir
         self.input_size = input_size
         self.shift_aug = shift_aug
@@ -40,29 +25,22 @@ class WebDatasetLoader(Dataset):
         self.yaw_signs = yaw_signs if yaw_signs is not None else [0.0]
         self.visualize_dir = visualize_dir
         
-        # WebDatasetのパターンを設定
         import glob
         shard_files = glob.glob(os.path.join(dataset_dir, "shard_*.tar*"))
         if not shard_files:
             raise ValueError(f"No shard files found in {dataset_dir}")
-        self.shard_pattern = shard_files
+        self.shard_pattern = sorted(shard_files)
         
-        # データセットを初期化
-        self.dataset = self._create_webdataset()
-        
-        # サンプル数を計算
-        self.samples_count = self._count_samples()
+        self.samples_count = self._count_samples_efficient()
+        self._build_index_mapping()
         
         if self.visualize_dir:
             os.makedirs(self.visualize_dir, exist_ok=True)
     
     def _handle_sample_format(self, sample):
-        # メタデータを取得
         if "metadata.json" in sample:
-            # data_collector_node.pyの新しい形式に対応
             metadata_data = sample["metadata.json"]
             action_data = sample["action.json"]
-            # metadataからangle情報を抽出
             if isinstance(metadata_data, (str, bytes)):
                 metadata_info = json.loads(metadata_data)
             else:
@@ -71,35 +49,43 @@ class WebDatasetLoader(Dataset):
         else:
             raise ValueError("Missing metadata.json in sample")
         
-        # numpy形式の画像データを直接取得（PIL変換なし）
-        img_array = sample["npy"]  # 既にnumpy配列として提供される
-        
-        # webdatasetがbytesとして提供する場合はnp.loadで読み込み
+        img_array = sample["npy"]
         if isinstance(img_array, bytes):
             img_array = np.load(BytesIO(img_array))
         
-        # RGB形式のnumpy配列として直接返す（PIL変換不要）
         return (img_array, angle_data, action_data)
     
-    def _create_webdataset(self):
-        """WebDatasetを作成"""
-        return (
-            wds.WebDataset(self.shard_pattern, shardshuffle=False)
-            .map(self._handle_sample_format)
-        )
+    def _build_index_mapping(self):
+        self.shard_samples = []
+        self.cumulative_samples = [0]
+        
+        stats_file = os.path.join(self.dataset_dir, "dataset_stats.json")
+        if os.path.exists(stats_file):
+            with open(stats_file, 'r') as f:
+                stats = json.load(f)
+                if 'shard_info' in stats:
+                    for shard_info in stats['shard_info']:
+                        samples_in_shard = shard_info.get('samples', 0)
+                        self.shard_samples.append(samples_in_shard)
+                        self.cumulative_samples.append(self.cumulative_samples[-1] + samples_in_shard)
+                    return
+        
+        # フォールバック: 均等分散と仮定
+        estimated_per_shard = max(1, self.samples_count // len(self.shard_pattern))
+        for i in range(len(self.shard_pattern)):
+            self.shard_samples.append(estimated_per_shard)
+            self.cumulative_samples.append(self.cumulative_samples[-1] + estimated_per_shard)
     
-    def _count_samples(self):
-        """サンプル数をカウント"""
-        # シャードファイルから統計情報を読み込み
+    def _count_samples_efficient(self):
         stats_file = os.path.join(self.dataset_dir, "dataset_stats.json")
         if os.path.exists(stats_file):
             with open(stats_file, 'r') as f:
                 stats = json.load(f)
                 return stats['total_samples']
         
-        # 統計情報がない場合は実際にサンプルをカウント
         count = 0
-        for sample in self.dataset:
+        dataset = wds.WebDataset(self.shard_pattern, shardshuffle=False)
+        for _ in dataset:
             count += 1
         return count
     
@@ -111,93 +97,76 @@ class WebDatasetLoader(Dataset):
         else:
             return self.samples_count
     
-    @staticmethod
-    def apply_yaw_projection(image, yaw_deg, fov_deg=150):
-        """Yaw方向の射影変換を適用"""
-        h, w = image.shape[:2]
-        f = w / (2 * np.tan(np.deg2rad(fov_deg / 2)))
-
-        # カメラ行列
-        K = np.array([
-            [f, 0, w / 2],
-            [0, f, h / 2],
-            [0, 0,     1]
-        ])
-
-        yaw = np.deg2rad(yaw_deg)
-        R = np.array([
-            [np.cos(yaw), 0, np.sin(yaw)],
-            [0,           1, 0],
-            [-np.sin(yaw), 0, np.cos(yaw)]
-        ])
-
-        K_inv = np.linalg.inv(K)
-        H = K @ R @ K_inv
-        return cv2.warpPerspective(image, H, (w, h), borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
+    def _apply_horizontal_shift_and_crop(self, img, shift_sign):
+        h, w = img.shape[:2]
+        crop_size = h
+        center_x = w // 2
+        max_shift = (w - crop_size) // 2
+        x_offset = int(shift_sign * max_shift / 2.0)
+        x_start = center_x - crop_size // 2 + x_offset
+        x_start = max(0, min(x_start, w - crop_size))
+        cropped_img = img[:, x_start:x_start + crop_size]
+        return cropped_img
     
+    def _get_sample_from_shard(self, shard_idx, sample_idx_in_shard):
+        shard_file = self.shard_pattern[shard_idx]
+        dataset = wds.WebDataset([shard_file], shardshuffle=False).map(self._handle_sample_format)
+        
+        for i, sample in enumerate(dataset):
+            if i == sample_idx_in_shard:
+                return sample
+        
+        for sample in dataset:
+            return sample
+        
+        raise IndexError(f"Sample not found in shard {shard_idx}")
+    
+    def _find_shard_for_index(self, base_idx):
+        if base_idx >= self.samples_count:
+            base_idx = base_idx % self.samples_count
+        
+        for i in range(len(self.cumulative_samples) - 1):
+            if self.cumulative_samples[i] <= base_idx < self.cumulative_samples[i + 1]:
+                shard_idx = i
+                sample_idx_in_shard = base_idx - self.cumulative_samples[i]
+                return shard_idx, sample_idx_in_shard
+        
+        return len(self.shard_samples) - 1, 0
+
     def __getitem__(self, idx):
         shift_signs = self.shift_signs if self.shift_aug else [0.0]
-        yaw_signs = self.yaw_signs if self.yaw_aug else [0.0]
+        yaw_signs = [0.0]  # yaw_aug無効化
 
-        aug_factor = len(shift_signs) * len(yaw_signs)
+        aug_factor = len(shift_signs)
         base_idx = idx // aug_factor if self.shift_aug else idx
         aug_idx = idx % aug_factor if self.shift_aug else 0
 
-        # WebDatasetから対応するサンプルを取得
         try:
-            # データセットを再作成してイテレート
-            if not hasattr(self, '_samples_cache'):
-                print(f"Loading WebDataset samples into cache...")
-                self._samples_cache = list(self.dataset)
-                print(f"Successfully cached {len(self._samples_cache)} samples")
+            shard_idx, sample_idx_in_shard = self._find_shard_for_index(base_idx)
+            img_array, angle_data, action_data = self._get_sample_from_shard(shard_idx, sample_idx_in_shard)
             
-            samples = self._samples_cache
-            if base_idx >= len(samples):
-                base_idx = base_idx % len(samples)
-            
-            img_array, angle_data, action_data = samples[base_idx]
-            
-            # JSONデータを解析
             angle_info = json.loads(angle_data)
             action_info = json.loads(action_data)
-            
-            # 画像データを直接使用（numpy配列のまま、色変換不要）
-            img = cv2.resize(img_array, self.input_size[::-1])
             
             angle = float(angle_info['angle'])
             action = int(action_info['action'])
             
-            # 拡張の組み合わせを適用
-            aug_combinations = [(s, y) for s in shift_signs for y in yaw_signs]
-            
-            if aug_idx < len(aug_combinations):
-                shift_sign, yaw_deg = aug_combinations[aug_idx]
+            if aug_idx < len(shift_signs):
+                shift_sign = shift_signs[aug_idx]
             else:
-                shift_sign, yaw_deg = 0.0, 0.0
+                shift_sign = 0.0
 
-            # パディング処理（x方向にシフト）
+            img_square = self._apply_horizontal_shift_and_crop(img_array, shift_sign)
+            img = cv2.resize(img_square, self.input_size[::-1])
+            
             if shift_sign != 0.0:
-                shift = int(shift_sign * self.input_size[0] * 0.1)
-                h, w = img.shape[:2]
-                trans_mat = np.array([[1, 0, shift], [0, 1, 0]], dtype=np.float32)
-                img = cv2.warpAffine(img, trans_mat, (w, h), borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
-                angle -= shift_sign * self.vel_offset
+                angle += shift_sign * self.vel_offset
 
-            # 射影変換（yaw方向に回転）
-            if yaw_deg != 0.0:
-                img = self.apply_yaw_projection(img, yaw_deg=yaw_deg)
-                if yaw_deg < 0:
-                    angle += 0.4
-                elif yaw_deg > 0:
-                    angle -= 0.4
-
-            # 可視化用保存
             if self.visualize_dir and idx < 100:
-                save_path = os.path.join(self.visualize_dir, f"{idx:05d}_a{angle:.2f}_c{action}.png")
-                cv2.imwrite(save_path, img)
+                save_path = os.path.join(self.visualize_dir, f"{idx:05d}_shift{shift_sign:.1f}_a{angle:.3f}_c{action}.png")
+                cv2.imwrite(save_path, cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
 
-            # テンソルに変換（メモリ効率向上）
-            img_tensor = torch.from_numpy(img.copy()).permute(2, 0, 1).float() / 255.0
+            img_tensor = torch.from_numpy(img).permute(2, 0, 1).float().div_(255.0)
             angle_tensor = torch.tensor([angle], dtype=torch.float32)
             action_tensor = torch.tensor(action, dtype=torch.long)
             action_onehot = torch.nn.functional.one_hot(action_tensor, num_classes=self.n_action_classes).squeeze().float()
@@ -205,14 +174,11 @@ class WebDatasetLoader(Dataset):
             return img_tensor, action_onehot, angle_tensor
             
         except Exception as e:
-            print(f"Error loading sample {idx} (base_idx: {base_idx}): {e}")
+            print(f"Error loading sample {idx} (base_idx: {base_idx}, shard: {shard_idx if 'shard_idx' in locals() else 'unknown'}): {e}")
             raise e
 
 
 class WebDatasetIterableLoader:
-    """
-    反復可能なWebDatasetローダー（大規模データセット用）
-    """
     def __init__(self, dataset_dir, input_size=(88, 200), batch_size=32, 
                  shift_aug=True, yaw_aug=True, shift_offset=5, vel_offset=0.2, 
                  n_action_classes=4, shuffle=True):

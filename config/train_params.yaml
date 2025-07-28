@@ -4,17 +4,17 @@ train:
   learning_rate: 0.0002   # 学習率（Adam最適化器に渡す）
   shuffle: true           # データローダのシャッフル設定（true 推奨）
   resample: false          # 各行動毎のリサンプリング. trueにすると各行動におけるデータ数が均一になるようにリサンプリングします.
-  image_height: 66
-  image_width: 200
+  image_height: 224        # 最終出力画像の高さ（学習用）
+  image_width: 224         # 最終出力画像の幅（学習用）
   action_classes: ["roadside, straight, left, right"] # 条件付き模倣学習の制御指令
-  model_filename: resnet_tsudanuma_challenge.pt # 出力する学習済みモデルの名前
+  model_filename: resnet_tsudanuma.pt # 出力する学習済みモデルの名前
   augment: gamma # [None, gamma, augmix]
   freeze_resnet_backbone: false # ResNet事前学習済みバックボーンを凍結してMLP部分のみ学習（true 推奨）
   use_pretrained_resnet: true   # ResNet事前学習済み重みを使用（false で0から学習）
   
-  # WebDataset拡張用パラメータ
-  shift_signs: [-2.0, -1.0, 0.0, 1.0, 2.0]  # シフト拡張の係数リスト
-  yaw_signs: [0.0]                           # Yaw拡張の角度リスト (deg)
+  # e2enavスタイル横シフト拡張パラメータ
+  shift_signs: [-2.0, -1.0, 0.0, 1.0, 2.0]  # 横シフト係数リスト（±2.0で最大±80pixel）
+  yaw_signs: [0.0]                           # Yaw拡張無効化（e2enavでは使用しない）
 
 #------以下, データ拡張用のパラメータ-----#
 

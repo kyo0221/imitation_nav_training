@@ -6,9 +6,9 @@ launch:
 
 controller:
   ros__parameters:
-    linear_max_vel: 0.8
+    linear_max_vel: 3.0
     angular_max_vel: 1.57
-     
+
 data_collector:
   ros__parameters:
     image_topic: "/image_raw"

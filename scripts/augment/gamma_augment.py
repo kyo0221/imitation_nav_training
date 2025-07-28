@@ -47,11 +47,14 @@ class GammaWrapperDataset(Dataset):
 
             if self.visualize and self.visualized_count < self.visualize_limit:
                 if random.random() < self.visualize_prob:
+                    # RGB形式のテンソルをnumpy配列に変換
                     img_np = (image.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+                    # OpenCVでの保存用にRGB→BGR変換
+                    bgr_img = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
                     save_path = os.path.join(
                         self.visualize_dir, f"{base_idx:05d}_aug{index}_{aug_type}.png"
                     )
-                    cv2.imwrite(save_path, img_np)
+                    cv2.imwrite(save_path, bgr_img)
                     self.visualized_count += 1
 
         return image, action_onehot, angle

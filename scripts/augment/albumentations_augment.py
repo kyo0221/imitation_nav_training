@@ -109,8 +109,7 @@ class AlbumentationsWrapperDataset(Dataset):
                         self.visualize_dir, 
                         f"{base_idx:05d}_aug{index}_albu.png"
                     )
-                    # OpenCVはBGR形式で保存するが、画像はRGB形式のままで保存
-                    cv2.imwrite(save_path, aug_img)
+                    cv2.imwrite(save_path, cv2.cvtColor(aug_img, cv2.COLOR_RGB2BGR))
                     self.visualized_count += 1
             
             # numpy配列からPyTorchテンソルに変換

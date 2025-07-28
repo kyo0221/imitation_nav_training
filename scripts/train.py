@@ -173,7 +173,7 @@ class Training:
         self.config = config
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.loader = DataLoader(dataset, batch_size=config.batch_size, num_workers=os.cpu_count() // 20, pin_memory=True, shuffle=config.shuffle)
+        self.loader = DataLoader(dataset, batch_size=config.batch_size, num_workers=18, pin_memory=True, shuffle=config.shuffle)
         self.model = ConditionalAnglePredictor(3, 1, config.image_height, config.image_width, len(config.class_names), config.freeze_resnet_backbone, config.use_pretrained_resnet).to(self.device)
         self.criterion = nn.MSELoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=config.learning_rate)
