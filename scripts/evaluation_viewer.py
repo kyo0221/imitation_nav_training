@@ -14,13 +14,15 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 from collections import deque
+from tqdm import tqdm
 
 class E2EEvaluationViewer:
-    def __init__(self, dataset_path, model_path, fps=10, history_size=100):
+    def __init__(self, dataset_path, model_path, fps=10, history_size=100, input_size=None):
         self.dataset_path = dataset_path
         self.model_path = model_path
         self.fps = fps
         self.history_size = history_size
+        self.input_size = input_size  # (width, height) tuple
         self.current_index = 0
         self.samples = []
         self.fig = None
@@ -37,12 +39,50 @@ class E2EEvaluationViewer:
         self.action_names = ["roadside", "straight", "left", "right"]
         self.action_colors = ["orange", "green", "blue", "red"]
         
+        # Get input size interactively if not provided
+        if self.input_size is None:
+            self.input_size = self._get_input_size_interactively()
+        
+        print(f"Using input size: {self.input_size[0]}x{self.input_size[1]} (width x height)")
+        
         # Load model and dataset
         self._load_model()
         self._load_dataset()
         
         # Setup visualization
         self._setup_visualization()
+    
+    def _get_input_size_interactively(self):
+        """Get input size from user interactively"""
+        print("\nModel input size configuration:")
+        print("Common sizes:")
+        print("  1. 200x88  (train_params.yaml default)")  
+        print("  2. 200x66  (updated train_params.yaml)")
+        print("  3. Custom size")
+        
+        while True:
+            try:
+                choice = input("Select option (1-3): ").strip()
+                
+                if choice == "1":
+                    return (200, 88)
+                elif choice == "2": 
+                    return (200, 66)
+                elif choice == "3":
+                    width = int(input("Enter width: ").strip())
+                    height = int(input("Enter height: ").strip())
+                    if width > 0 and height > 0:
+                        return (width, height)
+                    else:
+                        print("Width and height must be positive integers.")
+                else:
+                    print("Invalid choice. Please select 1, 2, or 3.")
+                    
+            except ValueError:
+                print("Invalid input. Please enter valid numbers.")
+            except KeyboardInterrupt:
+                print("\nOperation cancelled.")
+                sys.exit(0)
     
     def _load_model(self):
         """Load PyTorch model for inference"""
@@ -85,14 +125,22 @@ class E2EEvaluationViewer:
         urls = [str(f) for f in sorted(shard_files)]
         dataset = wds.WebDataset(urls, shardshuffle=False).decode()
         
-        # Load limited samples for demonstration (max 1000 samples)
-        print("Loading samples...")
-        max_samples = 1000
-        for i, sample in enumerate(dataset):
-            if i >= max_samples:
-                print(f"Limiting to {max_samples} samples for demonstration")
-                break
-                
+        # Load all samples from webdataset
+        print("Loading all samples from webdataset...")
+        print("⚠️  Loading complete dataset - this may take some time and use significant memory")
+        
+        # First pass to count total samples
+        print("Counting total samples...")
+        sample_count = 0
+        for _ in wds.WebDataset(urls, shardshuffle=False).decode():
+            sample_count += 1
+        print(f"Found {sample_count} total samples")
+        
+        # Second pass to load all samples with progress bar
+        dataset = wds.WebDataset(urls, shardshuffle=False).decode()
+        sample_iter = tqdm(enumerate(dataset), total=sample_count, desc="Loading samples")
+        
+        for i, sample in sample_iter:
             try:
                 # Extract image (already numpy array in RGB format)
                 image = sample["npy"]
@@ -112,12 +160,9 @@ class E2EEvaluationViewer:
                     "action": action,
                     "key": sample["__key__"]
                 })
-                
-                if (i + 1) % 100 == 0:
-                    print(f"Loaded {i + 1} samples...")
                     
             except Exception as e:
-                print(f"Error loading sample {i}: {e}")
+                sample_iter.write(f"Error loading sample {i}: {e}")
                 continue
         
         print(f"Loaded {len(self.samples)} samples total")
@@ -127,8 +172,8 @@ class E2EEvaluationViewer:
     
     def _preprocess_image(self, image):
         """Preprocess image for model inference"""
-        # Resize to model input size (assuming 88x200)
-        resized = cv2.resize(image, (200, 88))
+        # Resize to specified input size (width, height)
+        resized = cv2.resize(image, self.input_size)
         
         # Convert to tensor and normalize
         tensor = torch.from_numpy(resized).permute(2, 0, 1).float() / 255.0
@@ -451,11 +496,16 @@ def main():
     parser.add_argument("model_path", help="Path to PyTorch model file (.pt)")
     parser.add_argument("--fps", type=int, default=10, help="Display refresh rate (default: 10 Hz)")
     parser.add_argument("--history", type=int, default=100, help="History size for graphs (default: 100)")
+    parser.add_argument("--input-size", nargs=2, type=int, metavar=('WIDTH', 'HEIGHT'), 
+                       help="Model input image size (width height), e.g., --input-size 200 66")
     
     args = parser.parse_args()
     
+    # Convert input_size to tuple if provided
+    input_size = tuple(args.input_size) if args.input_size else None
+    
     try:
-        viewer = E2EEvaluationViewer(args.dataset_path, args.model_path, args.fps, args.history)
+        viewer = E2EEvaluationViewer(args.dataset_path, args.model_path, args.fps, args.history, input_size)
         viewer.show()
     except KeyboardInterrupt:
         print("\nInterrupted by user")
