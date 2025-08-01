@@ -12,19 +12,25 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 import torchvision.models as models
 
-from augment.gamma_augment import GammaWrapperDataset
-from augment.augmix_augment import AugMixWrapperDataset
-from augment.albumentations_augment import AlbumentationsWrapperDataset
+from augment.gamma_augment import create_gamma_augmented_dataset
+from augment.augmix_augment import create_augmix_augmented_dataset
+from augment.albumentations_augment import create_albumentations_augmented_dataset
 from augment.resampling_dataset import ResamplingWrapperDataset
 from augment.webdataset_loader import WebDatasetLoader
 
 
-class Config:
-    def __init__(self):
+class BaseConfig:
+    def __init__(self, config_section):
         package_dir = get_package_share_directory('imitation_nav_training')
         config_path = os.path.join(package_dir, 'config', 'train_params.yaml')
         with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)['train']
+            self.config = yaml.safe_load(f)[config_section]
+
+
+class Config:
+    def __init__(self):
+        base = BaseConfig('train')
+        config = base.config
 
         self.package_dir = os.path.dirname(os.path.realpath(__file__))
         self.result_dir = os.path.join(self.package_dir, '..', 'logs', 'result')
@@ -33,60 +39,15 @@ class Config:
         self.batch_size = config['batch_size']
         self.epochs = config['epochs']
         self.learning_rate = config['learning_rate']
-        self.shuffle = config.get('shuffle', True)
         self.image_height = config['image_height']
         self.image_width = config['image_width']
         self.model_filename = config['model_filename']
         self.class_names = [name.strip() for name in config['action_classes'][0].split(',')]
         self.augment_method = config['augment']
-        self.resample = config.get('resample', False)
         self.freeze_resnet_backbone = config.get('freeze_resnet_backbone', True)
         self.use_pretrained_resnet = config.get('use_pretrained_resnet', True)
-        self.shift_signs = config.get('shift_signs', [-2.0, -1.0, 0.0, 1.0, 2.0])
-        self.yaw_signs = config.get('yaw_signs', [0.0])
-
-class AugMixConfig:
-    def __init__(self):
-        package_dir = get_package_share_directory('imitation_nav_training')
-        config_path = os.path.join(package_dir, 'config', 'train_params.yaml')
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)['augmix']
-
-        self.num_augmented_samples = config['num_augmented_samples']
-        self.severity = config['severity']
-        self.width = config['width']
-        self.depth = config['depth']
-        self.alpha = config['alpha']
-        self.operations = config['operations']
-        self.visualize_image = config['visualize_image']
-
-class GammaConfig:
-    def __init__(self):
-        package_dir = get_package_share_directory('imitation_nav_training')
-        config_path = os.path.join(package_dir, 'config', 'train_params.yaml')
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)['gamma']
-
-        self.num_augmented_samples = config['num_augmented_samples']
-        self.gamma_range = config['gamma_range']
-        self.contrast_range = config['contrast_range']
-        self.visualize_image = config['visualize_image']
-
-class AlbumentationsConfig:
-    def __init__(self):
-        package_dir = get_package_share_directory('imitation_nav_training')
-        config_path = os.path.join(package_dir, 'config', 'train_params.yaml')
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)['albumentations']
-
-        self.num_augmented_samples = config['num_augmented_samples']
-        self.brightness_limit = config['brightness_limit']
-        self.contrast_limit = config['contrast_limit']
-        self.saturation_limit = config['saturation_limit']
-        self.hue_limit = config['hue_limit']
-        self.blur_limit = config['blur_limit']
-        self.h_flip_prob = config['h_flip_prob']
-        self.visualize_image = config['visualize_image']
+        self.gaussian_shift_params = config['gaussian_shift_params']
+        self.resample = config.get('resample', False)
 
 
 class ConditionalAnglePredictor(nn.Module):
@@ -96,21 +57,14 @@ class ConditionalAnglePredictor(nn.Module):
         self.flatten = nn.Flatten()
         self.dropout_fc = nn.Dropout(p=0.5)
 
-        # ResNet18 backbone
         resnet18 = models.resnet18(pretrained=use_pretrained_resnet)
         if n_channel != 3:
             resnet18.conv1 = nn.Conv2d(n_channel, 64, kernel_size=7, stride=2, padding=3, bias=False)
         
-        # 最後の全結合層とAvgPoolを削除してバックボーンを取得
         self.resnet_backbone = nn.Sequential(*list(resnet18.children())[:-2])
 
-        # Display ResNet initialization mode
-        if use_pretrained_resnet:
-            print("📦 Using pretrained ResNet18 weights from ImageNet")
-        else:
-            print("🌱 Initializing ResNet18 from scratch (no pretrained weights)")
+        print(f"📦 ResNet18 {'pretrained' if use_pretrained_resnet else 'from scratch'}")
         
-        # Freeze ResNet backbone if specified
         if freeze_resnet_backbone:
             for param in self.resnet_backbone.parameters():
                 param.requires_grad = False
@@ -118,54 +72,39 @@ class ConditionalAnglePredictor(nn.Module):
         else:
             print("🔓 ResNet backbone parameters trainable. Full model will be trained.")
         
-        # ResNet18の出力次元を計算
         with torch.no_grad():
             dummy_input = torch.zeros(1, n_channel, input_height, input_width)
             x = self.resnet_backbone(dummy_input)
             x = nn.AdaptiveAvgPool2d((1, 1))(x)
             x = self.flatten(x)
-            resnet_features = x.shape[1]  # ResNet18では512
+            resnet_features = x.shape[1]
         
-        # MLP部分（ResNet18の出力次元に合わせて）
         self.adaptive_pool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc1 = nn.Linear(resnet_features, 512)
         self.fc2 = nn.Linear(512, 512)
 
         self.branches = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(512, 256),
-                self.relu,
-                nn.Linear(256, n_out)
-            ) for _ in range(n_action_classes)
+            nn.Sequential(nn.Linear(512, 256), self.relu, nn.Linear(256, n_out))
+            for _ in range(n_action_classes)
         ])
-
-        self.cnn_layer = nn.Sequential(
-            self.resnet_backbone,
-            self.adaptive_pool,
-            self.flatten
-        )
-
-        # LSTMは維持
-        self.lstm = nn.LSTM(input_size=512, hidden_size=512, num_layers=1, batch_first=True)
 
 
     def forward(self, image, action_onehot):
-        # ResNet18で特徴抽出
-        features = self.cnn_layer(image)
+        features = self.flatten(self.adaptive_pool(self.resnet_backbone(image)))
         x = self.relu(self.fc1(features))
         x = self.dropout_fc(x)
         fc_out = self.relu(self.fc2(x))
-
-        # 条件付き模倣学習のブランチ処理（変更なし）
+        
         batch_size = image.size(0)
         action_indices = torch.argmax(action_onehot, dim=1)
-
-        output = torch.zeros(batch_size, self.branches[0][-1].out_features, device=image.device, dtype=fc_out.dtype)
+        output = torch.zeros(batch_size, self.branches[0][-1].out_features, 
+                           device=image.device, dtype=fc_out.dtype)
+        
         for idx, branch in enumerate(self.branches):
-            selected_idx = (action_indices == idx).nonzero().squeeze(1)
-            if selected_idx.numel() > 0:
-                output[selected_idx] = branch(fc_out[selected_idx])
-
+            mask = (action_indices == idx)
+            if mask.any():
+                output[mask] = branch(fc_out[mask])
+        
         return output
 
 class Training:
@@ -173,12 +112,19 @@ class Training:
         self.config = config
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.loader = DataLoader(dataset, batch_size=config.batch_size, num_workers=18, pin_memory=True, shuffle=config.shuffle)
-        self.model = ConditionalAnglePredictor(3, 1, config.image_height, config.image_width, len(config.class_names), config.freeze_resnet_backbone, config.use_pretrained_resnet).to(self.device)
+        self.loader = DataLoader(dataset, batch_size=config.batch_size, 
+                               num_workers=18, pin_memory=True, shuffle=False)
+        self.model = ConditionalAnglePredictor(
+            3, 1, config.image_height, config.image_width, 
+            len(config.class_names), config.freeze_resnet_backbone, 
+            config.use_pretrained_resnet).to(self.device)
         self.criterion = nn.MSELoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=config.learning_rate)
         self.writer = SummaryWriter(log_dir=config.result_dir)
         self.loss_log = []
+
+    def _save_model(self, filename):
+        torch.jit.script(self.model).save(os.path.join(self.config.result_dir, filename))
 
     def train(self):
         scaler = torch.cuda.amp.GradScaler()
@@ -186,49 +132,47 @@ class Training:
 
         for epoch in range(self.config.epochs):
             epoch_loss = 0.0
-            batch_iter = tqdm(self.loader, desc=f"Epoch {epoch+1}/{self.config.epochs}", leave=False)
-            for i, batch in enumerate(batch_iter):
+            batch_count = 0
+            
+            pbar = tqdm(desc=f"🚀 Epoch {epoch+1}/{self.config.epochs}", unit="batch")
+            
+            for batch in self.loader:
                 images, action_onehots, targets = [x.to(self.device) for x in batch]
 
                 self.optimizer.zero_grad()
-
                 with torch.cuda.amp.autocast():
                     preds = self.model(images, action_onehots)
                     loss = self.criterion(preds, targets)
-
                 scaler.scale(loss).backward()
                 scaler.step(self.optimizer)
                 scaler.update()
 
                 self.loss_log.append(loss.item())
                 epoch_loss += loss.item()
-                batch_iter.set_postfix(loss=loss.item())
+                batch_count += 1
+                
+                pbar.update(1)
+                pbar.set_postfix({'loss': f'{loss.item():.4f}'})
+            
+            pbar.close()
 
-            avg_loss = epoch_loss / len(self.loader)
-            self.writer.add_scalar('Loss/epoch_avg', avg_loss, epoch)
-            self.writer.flush()
+            if batch_count > 0:
+                avg_loss = epoch_loss / batch_count
+                self.writer.add_scalar('Loss/epoch_avg', avg_loss, epoch)
+                self.writer.flush()
+                print(f"📊 Epoch {epoch+1}/{self.config.epochs} - Avg Loss: {avg_loss:.4f}")
 
-            # Save model every 10 epochs
             if (epoch + 1) % 10 == 0:
-                self.save_intermediate_model(epoch + 1)
+                filename = f"{os.path.splitext(self.config.model_filename)[0]}_{epoch+1}ep.pt"
+                self._save_model(filename)
+                print(f"🐜 中間モデル保存: {filename}")
 
         self.save_results()
         self.writer.close()
 
-    def save_intermediate_model(self, epoch):
-        scripted_model = torch.jit.script(self.model)
-        base_filename = os.path.splitext(self.config.model_filename)[0]
-        extension = os.path.splitext(self.config.model_filename)[1]
-        intermediate_filename = f"{base_filename}_{epoch}ep{extension}"
-        scripted_path = os.path.join(self.config.result_dir, intermediate_filename)
-        scripted_model.save(scripted_path)
-        print(f"🐜 中間モデルを保存しました: {scripted_path}")
-
     def save_results(self):
-        scripted_model = torch.jit.script(self.model)
-        scripted_path = os.path.join(self.config.result_dir, self.config.model_filename)
-        scripted_model.save(scripted_path)
-        print(f"🐜 学習済みモデルを保存しました: {scripted_path}")
+        self._save_model(self.config.model_filename)
+        print(f"🐜 学習済みモデル保存: {self.config.model_filename}")
 
         plt.figure()
         plt.plot(self.loss_log)
@@ -240,86 +184,69 @@ class Training:
 
 
 if __name__ == '__main__':
-    import warnings
-    warnings.filterwarnings("ignore", category=UserWarning)
     parser = argparse.ArgumentParser()
     parser.add_argument('dataset', type=str, help='Path to dataset directory (contains webdataset/)')
     parser.add_argument('visualize_dir', nargs='?', default=None, help='Optional directory to save visualized samples')
     args = parser.parse_args()
 
     config = Config()
-    dataset_dir = args.dataset
-
-    # WebDatasetを使用
-    webdataset_dir = os.path.join(dataset_dir, 'webdataset')
+    webdataset_dir = os.path.join(args.dataset, 'webdataset')
     if not os.path.exists(webdataset_dir):
         raise ValueError(f"WebDataset directory not found: {webdataset_dir}")
     
-    # 拡張なしのベースデータセットを作成（生データセットサイズ用）
-    raw_dataset = WebDatasetLoader(
-        dataset_dir=webdataset_dir,
-        input_size=(config.image_height, config.image_width),
-        shift_aug=False,  # 拡張なし
-        yaw_aug=False,    # 拡張なし
-        shift_offset=5,
-        vel_offset=0.2,
-        n_action_classes=len(config.class_names),
-        shift_signs=config.shift_signs,
-        yaw_signs=config.yaw_signs,
-        visualize_dir=None
-    )
-    
-    # データ拡張ありのベースデータセットを作成
     base_dataset = WebDatasetLoader(
         dataset_dir=webdataset_dir,
         input_size=(config.image_height, config.image_width),
-        shift_offset=5,
         vel_offset=0.2,
         n_action_classes=len(config.class_names),
-        shift_signs=config.shift_signs,
-        yaw_signs=config.yaw_signs,
+        gaussian_shift_params=config.gaussian_shift_params,
         visualize_dir=args.visualize_dir
     )
     
-    print(f"Using WebDataset from: {webdataset_dir}")
-    print(f"Raw dataset size (no augmentation): {len(raw_dataset)} samples")
-    print(f"Base dataset size (with shift/yaw augmentation): {len(base_dataset)} samples")
+    print(f"Dataset: {base_dataset.samples_count:,} samples, augmentation: {config.augment_method}")
+
+    # Augmentation factory
+    augment_configs = {
+        'gamma': BaseConfig('gamma').config,
+        'augmix': BaseConfig('augmix').config,
+        'albumentations': BaseConfig('albumentations').config
+    }
 
     if config.augment_method == "gamma":
-        gamma_config = GammaConfig()
-        dataset = GammaWrapperDataset(
+        cfg = augment_configs['gamma']
+        dataset = create_gamma_augmented_dataset(
             base_dataset=base_dataset,
-            gamma_range=gamma_config.gamma_range,
-            contrast_range=gamma_config.contrast_range,
-            num_augmented_samples=gamma_config.num_augmented_samples,
-            visualize=gamma_config.visualize_image,
+            gamma_range=cfg['gamma_range'],
+            contrast_range=cfg['contrast_range'],
+            num_augmented_samples=cfg['num_augmented_samples'],
+            visualize=cfg['visualize_image'],
             visualize_dir=os.path.join(config.result_dir, "gamma")
         )
     elif config.augment_method == "augmix":
-        augmix_config = AugMixConfig()
-        dataset = AugMixWrapperDataset(
+        cfg = augment_configs['augmix']
+        dataset = create_augmix_augmented_dataset(
             base_dataset=base_dataset,
-            num_augmented_samples=augmix_config.num_augmented_samples,
-            severity=augmix_config.severity,
-            width=augmix_config.width,
-            depth=augmix_config.depth,
-            allowed_ops=augmix_config.operations,
-            alpha=augmix_config.alpha,
-            visualize=augmix_config.visualize_image,
+            num_augmented_samples=cfg['num_augmented_samples'],
+            severity=cfg['severity'],
+            width=cfg['width'],
+            depth=cfg['depth'],
+            allowed_ops=cfg['operations'],
+            alpha=cfg['alpha'],
+            visualize=cfg['visualize_image'],
             visualize_dir=os.path.join(config.result_dir, "augmix")
         )
     elif config.augment_method == "albumentations":
-        albumentations_config = AlbumentationsConfig()
-        dataset = AlbumentationsWrapperDataset(
+        cfg = augment_configs['albumentations']
+        dataset = create_albumentations_augmented_dataset(
             base_dataset=base_dataset,
-            num_augmented_samples=albumentations_config.num_augmented_samples,
-            brightness_limit=albumentations_config.brightness_limit,
-            contrast_limit=albumentations_config.contrast_limit,
-            saturation_limit=albumentations_config.saturation_limit,
-            hue_limit=albumentations_config.hue_limit,
-            blur_limit=albumentations_config.blur_limit,
-            h_flip_prob=albumentations_config.h_flip_prob,
-            visualize=albumentations_config.visualize_image,
+            num_augmented_samples=cfg['num_augmented_samples'],
+            brightness_limit=cfg['brightness_limit'],
+            contrast_limit=cfg['contrast_limit'],
+            saturation_limit=cfg['saturation_limit'],
+            hue_limit=cfg['hue_limit'],
+            blur_limit=cfg['blur_limit'],
+            h_flip_prob=cfg['h_flip_prob'],
+            visualize=cfg['visualize_image'],
             visualize_dir=os.path.join(config.result_dir, "albumentations")
         )
     elif config.augment_method in ["none", "None"]:
@@ -327,43 +254,15 @@ if __name__ == '__main__':
     else:
         raise ValueError(f"Unknown augmentation method: {config.augment_method}")
 
-    print(f"Dataset size after {config.augment_method} augmentation: {len(dataset)} samples")
-    
-    # データセットサイズの比較表示
-    raw_size = len(raw_dataset)
-    base_size = len(base_dataset)
-    augmented_size = len(dataset)
-    
-    print("\n" + "="*50)
-    print("DATASET SIZE SUMMARY")
-    print("="*50)
-    print(f"Raw dataset (no augmentation):      {raw_size:,} samples")
-    print(f"Base dataset (shift/yaw aug):       {base_size:,} samples (x{base_size/raw_size:.1f})")
-    print(f"After {config.augment_method} augmentation:        {augmented_size:,} samples (x{augmented_size/raw_size:.1f})")
-    print("="*50)
+    print(f"Final dataset: {len(dataset):,} samples" if hasattr(dataset, '__len__') else "Using streaming dataset")
 
     if config.resample:
-        print("Applying action class resampling...")
-        pre_resample_size = len(dataset)
         dataset = ResamplingWrapperDataset(
             base_dataset=dataset,
             n_action_classes=len(config.class_names),
             enable_resampling=True
         )
-        post_resample_size = len(dataset)
-        print(f"Resampling: {pre_resample_size:,} -> {post_resample_size:,} samples")
-    else:
-        print("Resampling disabled.")
-
-    final_size = len(dataset)
-    print(f"Final dataset size after resampling: {final_size:,} samples")
-    
-    # 最終的なデータセットサイズの比較
-    if config.resample:
-        print(f"Total augmentation factor: x{final_size/raw_size:.1f} (from {raw_size:,} to {final_size:,} samples)")
-    else:
-        print(f"Total augmentation factor: x{augmented_size/raw_size:.1f} (from {raw_size:,} to {augmented_size:,} samples)")
-    print("")
+        print(f"With resampling: {len(dataset):,} samples")
 
     trainer = Training(config, dataset)
     trainer.train()

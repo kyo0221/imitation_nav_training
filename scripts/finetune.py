@@ -11,9 +11,9 @@ from ament_index_python.packages import get_package_share_directory
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from augment.gamma_augment import GammaWrapperDataset
-from augment.augmix_augment import AugMixWrapperDataset
-from augment.albumentations_augment import AlbumentationsWrapperDataset
+from augment.gamma_augment import create_gamma_augmented_dataset
+from augment.augmix_augment import create_augmix_augmented_dataset
+from augment.albumentations_augment import create_albumentations_augmented_dataset
 from augment.imitation_dataset import ImitationDataset
 from augment.resampling_dataset import ResamplingWrapperDataset
 
@@ -332,7 +332,7 @@ if __name__ == '__main__':
     def apply_augmentation(base_dataset, dataset_name):
         if config.augment_method == "gamma":
             gamma_config = GammaConfig()
-            return GammaWrapperDataset(
+            return create_gamma_augmented_dataset(
                 base_dataset=base_dataset,
                 gamma_range=gamma_config.gamma_range,
                 contrast_range=gamma_config.contrast_range,
@@ -342,7 +342,7 @@ if __name__ == '__main__':
             )
         elif config.augment_method == "augmix":
             augmix_config = AugMixConfig()
-            return AugMixWrapperDataset(
+            return create_augmix_augmented_dataset(
                 base_dataset=base_dataset,
                 num_augmented_samples=augmix_config.num_augmented_samples,
                 severity=augmix_config.severity,
@@ -355,7 +355,7 @@ if __name__ == '__main__':
             )
         elif config.augment_method == "albumentations":
             albumentations_config = AlbumentationsConfig()
-            return AlbumentationsWrapperDataset(
+            return create_albumentations_augmented_dataset(
                 base_dataset=base_dataset,
                 num_augmented_samples=albumentations_config.num_augmented_samples,
                 brightness_limit=albumentations_config.brightness_limit,

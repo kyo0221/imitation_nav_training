@@ -1,60 +1,50 @@
 import os
 
-from torch.utils.data import Dataset
 import numpy as np
-import torch
 import random
 import cv2
 import torchvision.transforms.functional as F
 
 
-class GammaWrapperDataset(Dataset):
-    def __init__(self, base_dataset, gamma_range=(0.9, 1.1), num_augmented_samples=1,
-                 contrast_range=(0.8, 1.2), visualize=False, visualize_dir=None):
-        self.base_dataset = base_dataset
-        self.gamma_range = gamma_range
-        self.contrast_range = contrast_range
-        self.num_augmented_samples = num_augmented_samples
+def create_gamma_augmented_dataset(base_dataset, gamma_range=(0.9, 1.1),
+                                   num_augmented_samples=1,
+                                   contrast_range=(0.8, 1.2), visualize=False,
+                                   visualize_dir=None):
+    if visualize and visualize_dir:
+        os.makedirs(visualize_dir, exist_ok=True)
 
-        self.visualize = visualize
-        self.visualize_dir = visualize_dir
-        self.visualize_limit = 100
-        self.visualized_count = 0
-        self.total_augmented = len(base_dataset) * num_augmented_samples
-        self.visualize_prob = min(1.0, self.visualize_limit / self.total_augmented)
+    # WebDatasetのcompose()機能を活用
+    return base_dataset.compose(lambda source: _apply_gamma_augmentation(
+        source, gamma_range, contrast_range, num_augmented_samples,
+        visualize, visualize_dir
+    ))
 
-        if self.visualize and self.visualize_dir:
-            os.makedirs(self.visualize_dir, exist_ok=True)
 
-        self.original_length = len(base_dataset)
+def _apply_gamma_augmentation(source, gamma_range, contrast_range,
+                              num_augmented_samples, visualize,
+                              visualize_dir):
+    visualized_count = 0
+    visualize_limit = 100
 
-    def __len__(self):
-        return self.original_length * (1 + self.num_augmented_samples)
+    for image, action_onehot, angle in source:
+        yield image, action_onehot, angle
 
-    def __getitem__(self, index):
-        base_idx = index // (1 + self.num_augmented_samples)
-        aug_idx = index % (1 + self.num_augmented_samples)
-        is_aug = aug_idx != 0
+        for _ in range(num_augmented_samples):
+            gamma = random.uniform(*gamma_range)
+            contrast = random.uniform(*contrast_range)
+            augmented_image = F.adjust_gamma(image, gamma)
+            augmented_image = F.adjust_contrast(augmented_image, contrast)
 
-        image, action_onehot, angle = self.base_dataset[base_idx]
+            if visualize and visualize_dir and visualized_count < visualize_limit:
+                img_np = (augmented_image.permute(1, 2, 0).numpy() * 255).astype(
+                    np.uint8)
+                bgr_img = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+                save_path = os.path.join(
+                    visualize_dir,
+                    f"{visualized_count:05d}_gamma{gamma:.2f}_"
+                    f"contrast{contrast:.2f}.png"
+                )
+                cv2.imwrite(save_path, bgr_img)
+                visualized_count += 1
 
-        if is_aug:
-            gamma = random.uniform(*self.gamma_range)
-            contrast = random.uniform(*self.contrast_range)
-            image = F.adjust_gamma(image, gamma)
-            image = F.adjust_contrast(image, contrast)
-            aug_type = f"gamma{gamma:.2f}_contrast{contrast:.2f}"
-
-            if self.visualize and self.visualized_count < self.visualize_limit:
-                if random.random() < self.visualize_prob:
-                    # RGB形式のテンソルをnumpy配列に変換
-                    img_np = (image.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
-                    # OpenCVでの保存用にRGB→BGR変換
-                    bgr_img = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
-                    save_path = os.path.join(
-                        self.visualize_dir, f"{base_idx:05d}_aug{index}_{aug_type}.png"
-                    )
-                    cv2.imwrite(save_path, bgr_img)
-                    self.visualized_count += 1
-
-        return image, action_onehot, angle
+            yield augmented_image, action_onehot, angle
