@@ -16,7 +16,7 @@ from augment.gamma_augment import create_gamma_augmented_dataset
 from augment.augmix_augment import create_augmix_augmented_dataset
 from augment.albumentations_augment import create_albumentations_augmented_dataset
 from augment.resampling_dataset import ResamplingWrapperDataset
-from augment.webdataset_loader import WebDatasetLoader
+from augment.webdataset_loader import create_webdataset_streaming_loader
 
 
 class BaseConfig:
@@ -46,7 +46,7 @@ class Config:
         self.augment_method = config['augment']
         self.freeze_resnet_backbone = config.get('freeze_resnet_backbone', True)
         self.use_pretrained_resnet = config.get('use_pretrained_resnet', True)
-        self.gaussian_shift_params = config['gaussian_shift_params']
+        self.shift_signs = config.get('shift_signs', [-2.0, -1.0, 0.0, 1.0, 2.0])
         self.resample = config.get('resample', False)
 
 
@@ -194,23 +194,28 @@ if __name__ == '__main__':
     if not os.path.exists(webdataset_dir):
         raise ValueError(f"WebDataset directory not found: {webdataset_dir}")
     
-    base_dataset = WebDatasetLoader(
+    base_dataset = create_webdataset_streaming_loader(
         dataset_dir=webdataset_dir,
         input_size=(config.image_height, config.image_width),
         vel_offset=0.2,
         n_action_classes=len(config.class_names),
-        gaussian_shift_params=config.gaussian_shift_params,
+        shift_signs=config.shift_signs,
         visualize_dir=args.visualize_dir
     )
     
-    print(f"Dataset: {base_dataset.samples_count:,} samples, augmentation: {config.augment_method}")
+    print(f"Dataset loaded from: {webdataset_dir}, augmentation: {config.augment_method}")
 
     # Augmentation factory
     augment_configs = {
         'gamma': BaseConfig('gamma').config,
         'augmix': BaseConfig('augmix').config,
-        'albumentations': BaseConfig('albumentations').config
     }
+    
+    # albumentationsセクションが存在する場合のみ追加
+    try:
+        augment_configs['albumentations'] = BaseConfig('albumentations').config
+    except KeyError:
+        pass  # albumentationsセクションが設定ファイルにない場合はスキップ
 
     if config.augment_method == "gamma":
         cfg = augment_configs['gamma']

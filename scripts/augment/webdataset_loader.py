@@ -11,15 +11,11 @@ import glob
 
 def create_webdataset_streaming_loader(dataset_dir, input_size=(224, 224),
                                        vel_offset=0.2, n_action_classes=4,
-                                       gaussian_shift_params=None,
+                                       shift_signs=None,
                                        visualize_dir=None, shuffle_buffer=1000):
-    # ガウス分布パラメータの設定
-    if gaussian_shift_params is None:
-        gaussian_shift_params = {
-            'mean': 0.0,      # 分布の中心値（0.0で中央基準）
-            'std': 0.67,      # 標準偏差（3σ≈2.0で従来範囲[-2.0,2.0]をカバー）
-            'clip_range': [-2.0, 2.0]  # 値域制限（極端な値を防ぐ）
-        }
+    # e2enavと同じリストベース固定偏差パラメータの設定
+    if shift_signs is None:
+        shift_signs = [-2.0, -1.0, 0.0, 1.0, 2.0]  # e2enavと同じ固定リスト
 
     shard_files = glob.glob(os.path.join(dataset_dir, "shard_*.tar*"))
     if not shard_files:
@@ -30,13 +26,13 @@ def create_webdataset_streaming_loader(dataset_dir, input_size=(224, 224),
         os.makedirs(visualize_dir, exist_ok=True)
 
     # WebDatasetを直接作成し、compose()で処理を統合
-    dataset = (wds.WebDataset(shard_pattern, shardshuffle=True,
+    dataset = (wds.WebDataset(shard_pattern, shardshuffle=1000,
                               empty_check=False)
                .shuffle(shuffle_buffer)
                .map(lambda sample: _handle_sample_format(sample))
                .compose(lambda source: _process_streaming_samples(
                    source, input_size, vel_offset, n_action_classes,
-                   gaussian_shift_params, visualize_dir)))
+                   shift_signs, visualize_dir)))
 
     return dataset
 
@@ -61,7 +57,7 @@ def _handle_sample_format(sample):
 
 
 def _process_streaming_samples(source, input_size, vel_offset,
-                               n_action_classes, gaussian_shift_params,
+                               n_action_classes, shift_signs,
                                visualize_dir):
     vis_counter = 0
 
@@ -72,27 +68,16 @@ def _process_streaming_samples(source, input_size, vel_offset,
         angle = float(angle_info['angle'])
         action = int(action_info['action'])
 
-        # ガウス分布から複数のshift値をサンプリング（従来の5個と同様）
-        num_samples = 5  # 従来のshift_signsの数と同じ
-        shift_values = []
-        for _ in range(num_samples):
-            shift_val = np.random.normal(
-                gaussian_shift_params['mean'],
-                gaussian_shift_params['std']
-            )
-            # 値域制限（クリッピング）
-            clip_min, clip_max = gaussian_shift_params['clip_range']
-            shift_val = np.clip(shift_val, clip_min, clip_max)
-            shift_values.append(shift_val)
+        # e2enavと同じリストベース固定偏差による横ズレ画像生成
+        shift_values = shift_signs  # リストをそのまま使用
 
         for shift_sign in shift_values:
             img_square = _apply_horizontal_shift_and_crop(img_array,
                                                           shift_sign)
             img = cv2.resize(img_square, input_size[::-1])
 
-            adjusted_angle = angle
-            # ガウス分布では常に角度調整を適用
-            adjusted_angle += shift_sign * vel_offset
+            # e2enavと同じ角度調整方式
+            adjusted_angle = angle + shift_sign * vel_offset
 
             if visualize_dir and vis_counter < 100:
                 filename = (f"{vis_counter:05d}_shift{shift_sign:.1f}_"
